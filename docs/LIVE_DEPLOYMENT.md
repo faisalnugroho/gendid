@@ -110,8 +110,13 @@ parity tests, and all live scenarios re-verified on the final contract.
   stored only in localStorage; studionet charges no gas).
 - Failures (chain errors, contract reverts incl. `gendid: …` UserError
   payloads) render as errors — never as AGREED.
-- Deployment URL: not yet deployed to a public host (static site; deployment
-  is out of scope for this round per the stop condition).
+- Deployment URL: **https://faisalnugroho.github.io/gendid/** (GitHub Pages,
+  verified 2026-09-08: page loads in LIVE mode with the pinned contract
+  address; demo A executed through a real StudioNet consensus round from the
+  public URL — tx `0xd30b9230690c9850d4e7cf27b8682071190c6ca0cae70764f307ba8d84b820c9`
+  finalized MAJORITY_AGREE and the on-chain record
+  `GD-gendid-demo-01-f58655301684b609` reads AGREED; zero console errors;
+  390px mobile layout verified with no horizontal overflow).
 
 ## Regression summary (after final contract changes)
 

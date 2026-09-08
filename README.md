@@ -11,6 +11,8 @@ GenLayer validator consensus.
 > — deployed, smoke-tested, and browser-verified end-to-end (see
 > [Verified live results](#verified-live-results) and
 > [docs/LIVE_DEPLOYMENT.md](docs/LIVE_DEPLOYMENT.md)).
+>
+> **Try it: https://faisalnugroho.github.io/gendid/**
 
 ---
 
