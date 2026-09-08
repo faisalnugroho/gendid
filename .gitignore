@@ -1,0 +1,20 @@
+# ---- secrets (NEVER commit) ----
+scripts/smoke_deployer.json
+scripts/_smoke_deployer_REF.json
+*.private
+*.priv
+.env
+.env.*
+
+# ---- internal deployment artifacts (local evidence, not for public repo) ----
+docs/deployment_log.json
+docs/deploy_run.log
+artifacts/
+evidence/
+
+# ---- generated / caches ----
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+.DS_Store

@@ -1,0 +1,676 @@
+<!doctype html>
+<!-- GenDid — DID Agreement Judge. Static, zero-backend frontend.
+     All crypto is client-side (tweetnacl Ed25519 did:key); seeds never leave
+     this browser. GenLayer path (when a contract address is configured) runs
+     through the bundled genlayer-js SDK; without one, the panel is clearly
+     labeled LOCAL / DEMO MODE. Independent prototype — not affiliated with
+     or endorsed by FLOP Labs, Technocore, or GenLayer Labs. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>GenDid — DID Agreement Judge</title>
+<meta name="description" content="Where signed agent conversations become verifiable agreements. GenDid adjudicates DID-authenticated technocore transcripts via GenLayer consensus. Independent prototype.">
+<style>
+/* ============================== tokens ==============================
+   Palette: deep-navy ink over near-black, one electric cyan conductor for
+   verified truth, amber for warning lanes, red for rejections. Type is a
+   mono pair: system terminal mono for data, tight uppercase for protocol
+   labels. Structure encodes the pipeline: every section carries its layer
+   number — 01 IDENTITY, 02 TRANSCRIPT, 03 VERIFY, 04 ANALYZE, 05 ADJUDICATE,
+   06 RECEIPT — a real sequence, so numbering is information here. */
+:root{
+  --bg:#05080f;
+  --bg2:#070c16;
+  --panel:#0a111f;
+  --panel2:#0d1524;
+  --line:#1a2438;
+  --line2:#263452;
+  --ink:#e6edf7;
+  --dim:#8fa0b8;
+  --faint:#5a6b84;
+  --cyan:#39d7ff;
+  --cyan-dim:rgba(57,215,255,.12);
+  --cyan-line:rgba(57,215,255,.35);
+  --green:#3ddc97;
+  --green-bg:rgba(61,220,151,.09);
+  --amber:#ffb547;
+  --amber-bg:rgba(255,181,71,.09);
+  --red:#ff5c6c;
+  --red-bg:rgba(255,92,108,.09);
+  --violet:#9d8cff;
+  --mono:"SFMono-Regular",ui-monospace,"Cascadia Code","JetBrains Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --radius:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--bg);
+  color:var(--ink);
+  font-family:var(--mono);
+  font-size:15px;
+  line-height:1.55;
+  min-height:100vh;
+}
+/* ambient grid — the "protocol fabric" backdrop, extremely low key */
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background-image:
+    linear-gradient(rgba(57,215,255,.025) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(57,215,255,.025) 1px,transparent 1px);
+  background-size:44px 44px;
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
+a{color:var(--cyan);text-decoration:none}
+a:hover{text-decoration:underline}
+button{font-family:inherit}
+::selection{background:rgba(57,215,255,.25)}
+
+.wrap{position:relative;z-index:1;max-width:1060px;margin:0 auto;padding:0 18px 90px}
+
+/* ============================== hero ============================== */
+.hero{padding:54px 0 30px}
+.hero-eyebrow{
+  display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+  font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);
+  margin-bottom:22px;
+}
+.hero-eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 8px rgba(61,220,151,.8);animation:pulse 2.4s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.hero h1{
+  font-size:clamp(40px,9vw,74px);font-weight:700;letter-spacing:-.02em;line-height:1.02;
+  margin-bottom:8px;
+}
+.hero h1 .tick{color:var(--cyan)}
+.hero-sub{font-size:clamp(15px,2.6vw,19px);color:var(--dim);max-width:640px;margin-bottom:26px}
+.hero-sub strong{color:var(--ink);font-weight:600}
+.layers{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:30px}
+.layer{
+  border:1px solid var(--line);border-radius:var(--radius);padding:16px 16px 14px;
+  background:linear-gradient(180deg,var(--panel) 0%,var(--bg2) 100%);
+  position:relative;overflow:hidden;
+}
+.layer::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--cyan);opacity:.55}
+.layer:nth-child(2)::before{background:var(--green)}
+.layer:nth-child(3)::before{background:var(--violet)}
+.layer .ln{font-size:10px;letter-spacing:.22em;color:var(--faint);text-transform:uppercase;margin-bottom:8px}
+.layer h3{font-size:14px;font-weight:600;margin-bottom:6px;line-height:1.35}
+.layer p{font-size:12.5px;color:var(--dim);line-height:1.5}
+.layer p em{font-style:normal;color:var(--ink)}
+
+/* ============================== sections ============================== */
+section{margin:34px 0}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:14px;flex-wrap:wrap}
+.sec-no{
+  font-size:11px;letter-spacing:.2em;color:var(--cyan);border:1px solid var(--cyan-line);
+  padding:3px 9px;border-radius:4px;background:var(--cyan-dim);white-space:nowrap;
+}
+.sec-head h2{font-size:20px;font-weight:600;letter-spacing:.01em}
+.sec-head .hint{font-size:12px;color:var(--faint);margin-left:auto}
+.card{
+  border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--panel);padding:18px;
+}
+.card + .card{margin-top:12px}
+.card h4{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin-bottom:12px;font-weight:600}
+
+/* ============================== buttons / controls ============================== */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  background:var(--panel2);border:1px solid var(--line);color:var(--ink);
+  border-radius:8px;padding:12px 18px;font-size:13.5px;font-weight:600;cursor:pointer;
+  transition:border-color .15s,background .15s,transform .1s;min-height:44px; /* touch */
+  letter-spacing:.02em;
+}
+.btn:hover{border-color:var(--cyan-line);background:#111a2c}
+.btn:active{transform:translateY(1px)}
+.btn:focus-visible,a:focus-visible,button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.btn.primary{
+  background:linear-gradient(180deg,rgba(57,215,255,.16),rgba(57,215,255,.05));
+  border-color:var(--cyan-line);color:var(--cyan);
+}
+.btn.primary:hover{border-color:var(--cyan)}
+.btn.big{width:100%;padding:16px;font-size:15px}
+.btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.btnrow{display:flex;flex-wrap:wrap;gap:10px}
+.btnrow .btn{flex:1 1 auto;min-width:150px}
+@media(max-width:560px){.btnrow .btn{min-width:100%}}
+label.fld{display:block;font-size:12px;color:var(--dim);margin-bottom:6px;letter-spacing:.04em}
+input[type=text],textarea,select{
+  width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:8px;
+  color:var(--ink);font-family:var(--mono);font-size:14px;padding:12px 14px;min-height:44px;
+}
+textarea{min-height:120px;resize:vertical;line-height:1.6}
+textarea.tall{min-height:220px}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--cyan-line)}
+input[type=text]::placeholder,textarea::placeholder{color:var(--faint)}
+.fieldrow{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:640px){.fieldrow{grid-template-columns:1fr}}
+.fld-block{margin-bottom:14px}
+
+/* ============================== key/value grids ============================== */
+.kv{display:grid;grid-template-columns:170px 1fr;gap:2px 16px;font-size:13.5px}
+@media(max-width:640px){.kv{grid-template-columns:1fr;gap:0 0}.kv .k{margin-top:9px}}
+.kv .k{color:var(--faint);padding:6px 0;word-break:break-word;letter-spacing:.03em}
+.kv .v{padding:6px 0;color:var(--ink);word-break:break-word;min-width:0}
+.kv .v.dim{color:var(--dim)}
+.mono-s{font-size:12px}
+.hashline{display:flex;align-items:center;gap:8px;min-width:0}
+.hashline code{
+  font-size:12px;color:var(--cyan);word-break:break-all;word-wrap:anywhere;
+  background:var(--cyan-dim);padding:2px 6px;border-radius:4px;
+}
+.copybtn{
+  flex:0 0 auto;background:none;border:1px solid var(--line);color:var(--dim);
+  border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;min-height:34px;letter-spacing:.05em;
+}
+.copybtn:hover{border-color:var(--cyan-line);color:var(--cyan)}
+
+/* ============================== status pills ============================== */
+.pill{
+  display:inline-flex;align-items:center;gap:6px;border-radius:999px;
+  font-size:11px;font-weight:700;letter-spacing:.09em;padding:4px 11px;white-space:nowrap;
+  border:1px solid var(--line);
+}
+.pill.ok{color:var(--green);border-color:rgba(61,220,151,.4);background:var(--green-bg)}
+.pill.warn{color:var(--amber);border-color:rgba(255,181,71,.4);background:var(--amber-bg)}
+.pill.bad{color:var(--red);border-color:rgba(255,92,108,.4);background:var(--red-bg)}
+.pill.info{color:var(--cyan);border-color:var(--cyan-line);background:var(--cyan-dim)}
+.pill.mute{color:var(--dim)}
+.pill .g{font-size:9px}
+
+/* ============================== transcript ============================== */
+.rec-list{display:flex;flex-direction:column;gap:10px;margin-top:4px}
+.rec{
+  border:1px solid var(--line);border-radius:8px;background:var(--panel2);
+  padding:12px 14px;transition:border-color .2s;
+}
+.rec.auth{border-color:rgba(61,220,151,.35)}
+.rec.uns{border-color:rgba(255,181,71,.3)}
+.rec.inv{border-color:rgba(255,92,108,.4)}
+.rec.mal{border-color:rgba(255,92,108,.4);opacity:.85}
+.rec.dup{border-color:rgba(157,140,255,.4)}
+.rec-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:6px}
+.rec-seq{
+  font-size:11px;color:var(--cyan);letter-spacing:.08em;background:var(--cyan-dim);
+  border-radius:4px;padding:2px 7px;font-weight:700;
+}
+.rec-did{font-size:11px;color:var(--dim);word-break:break-all;min-width:0}
+.rec-ts{font-size:10.5px;color:var(--faint);margin-left:auto;white-space:nowrap}
+.rec-text{
+  font-size:14px;color:var(--ink);white-space:pre-wrap;word-break:break-word;
+  padding:8px 10px;background:rgba(5,8,15,.55);border-radius:6px;margin:6px 0 2px;
+}
+.rec-meta{font-size:11px;color:var(--faint);word-break:break-all;margin-top:6px}
+.rec-meta b{color:var(--dim);font-weight:600}
+.rec-reject{font-size:11px;color:var(--red);margin-top:5px}
+.tclk{
+  display:inline-block;font-size:10px;color:var(--violet);border:1px solid rgba(157,140,255,.4);
+  border-radius:4px;padding:1px 6px;letter-spacing:.08em;margin-left:6px;
+}
+
+/* ============================== counters ============================== */
+.counters{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.counter{border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--panel2)}
+.counter .n{font-size:26px;font-weight:700;line-height:1.1}
+.counter .l{font-size:10.5px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase;margin-top:3px}
+.counter.ok .n{color:var(--green)}
+.counter.warn .n{color:var(--amber)}
+.counter.bad .n{color:var(--red)}
+.counter.info .n{color:var(--cyan)}
+.counter.mute .n{color:var(--dim)}
+
+/* ============================== pipeline panel ============================== */
+.pipe{display:flex;flex-direction:column;gap:0}
+.pipe-step{
+  display:flex;gap:14px;align-items:flex-start;padding:13px 6px;
+  border-left:2px solid var(--line);margin-left:8px;position:relative;
+}
+.pipe-step:first-child{border-left-color:transparent}
+.pipe-step::before{
+  content:"";position:absolute;left:-7px;top:16px;width:12px;height:12px;border-radius:50%;
+  background:var(--bg);border:2px solid var(--line);
+}
+.pipe-step.active{border-left-color:var(--cyan)}
+.pipe-step.active::before{border-color:var(--cyan);background:var(--cyan);box-shadow:0 0 10px rgba(57,215,255,.6)}
+.pipe-step.done{border-left-color:rgba(61,220,151,.55)}
+.pipe-step.done::before{border-color:var(--green);background:var(--green)}
+.pipe-step.err{border-left-color:rgba(255,92,108,.55)}
+.pipe-step.err::before{border-color:var(--red);background:var(--red)}
+.pipe-step .pt{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);font-weight:700}
+.pipe-step.active .pt{color:var(--cyan)}
+.pipe-step.done .pt{color:var(--green)}
+.pipe-step.err .pt{color:var(--red)}
+.pipe-step .pd{font-size:12.5px;color:var(--dim);margin-top:3px;word-break:break-word;min-width:0}
+.pipe-step .pd a{font-size:12px}
+.mode-tag{
+  display:inline-flex;align-items:center;gap:7px;font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;font-weight:700;border-radius:6px;padding:5px 11px;
+}
+.mode-tag.local{color:var(--amber);border:1px solid rgba(255,181,71,.45);background:var(--amber-bg)}
+.mode-tag.live{color:var(--green);border:1px solid rgba(61,220,151,.45);background:var(--green-bg)}
+
+/* ============================== result banner ============================== */
+.result{
+  border-radius:var(--radius);padding:26px 20px;text-align:center;position:relative;overflow:hidden;
+  border:1px solid var(--line);background:var(--panel);
+}
+.result .r-status{font-size:clamp(26px,7vw,44px);font-weight:800;letter-spacing:.02em;line-height:1.15}
+.result .r-sub{font-size:13px;color:var(--dim);margin-top:8px;max-width:640px;margin-left:auto;margin-right:auto}
+.result.ok{border-color:rgba(61,220,151,.5);background:linear-gradient(180deg,rgba(61,220,151,.07),var(--panel))}
+.result.ok .r-status{color:var(--green)}
+.result.no{border-color:rgba(255,92,108,.5);background:linear-gradient(180deg,rgba(255,92,108,.06),var(--panel))}
+.result.no .r-status{color:var(--red)}
+.result.amb{border-color:rgba(255,181,71,.5);background:linear-gradient(180deg,rgba(255,181,71,.06),var(--panel))}
+.result.amb .r-status{color:var(--amber)}
+.result.ins{border-color:rgba(143,160,184,.5);background:linear-gradient(180deg,rgba(143,160,184,.05),var(--panel))}
+.result.ins .r-status{color:var(--dim)}
+.result .r-error{font-size:12px;color:var(--amber);margin-top:8px}
+
+/* ============================== q labels ============================== */
+.qgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+.qrow{
+  display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:8px;
+  padding:10px 12px;background:var(--panel2);font-size:12.5px;
+}
+.qrow .qq{flex:1;min-width:0}
+.qrow .qn{font-weight:700;color:var(--ink);font-size:12.5px}
+.qrow .qd{color:var(--faint);font-size:11px;margin-top:2px;line-height:1.45}
+
+/* ============================== why panel ============================== */
+.why-item{border:1px solid var(--line);border-radius:8px;padding:14px;background:var(--panel2);margin-bottom:10px}
+.why-item .w-k{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:700;margin-bottom:6px}
+.why-item .w-v{font-size:15px;color:var(--ink);margin-bottom:10px;word-break:break-word}
+.why-cites{display:flex;flex-direction:column;gap:8px}
+.why-cite{
+  display:flex;gap:10px;align-items:flex-start;border-left:2px solid var(--cyan-line);
+  padding:7px 10px;background:rgba(5,8,15,.5);border-radius:0 6px 6px 0;
+}
+.why-cite .cid{font-size:11px;color:var(--cyan);font-weight:700;white-space:nowrap;padding-top:2px}
+.why-cite .ctx{font-size:12.5px;color:var(--dim);word-break:break-word;min-width:0}
+.why-cite .ctx.unsigned{color:var(--amber);opacity:.9}
+.why-none{font-size:13px;color:var(--faint);border:1px dashed var(--line);border-radius:8px;padding:16px;text-align:center}
+
+/* ============================== receipt ============================== */
+.receipt{
+  border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--panel);
+}
+.receipt .r-head{
+  display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;
+  padding:14px 18px;background:var(--panel2);border-bottom:1px solid var(--line);
+}
+.receipt .r-head h3{font-size:15px;letter-spacing:.04em}
+.receipt .r-sec{padding:16px 18px;border-bottom:1px solid var(--line)}
+.receipt .r-sec:last-child{border-bottom:none}
+.receipt .r-sec h4{
+  font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--cyan);
+  margin-bottom:12px;font-weight:700;
+}
+.receipt .r-sec.sec-g h4{color:var(--violet)}
+.receipt .r-sec .disc{
+  font-size:10.5px;color:var(--faint);letter-spacing:.05em;margin-bottom:10px;line-height:1.5;
+}
+.receipt-actions{display:flex;flex-wrap:wrap;gap:10px;padding:14px 18px}
+
+/* ============================== demos ============================== */
+.demo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.demo-card{
+  border:1px solid var(--line);border-radius:var(--radius);background:var(--panel2);
+  padding:16px;cursor:pointer;transition:border-color .15s,background .15s;text-align:left;
+  display:flex;flex-direction:column;gap:8px;min-height:44px;
+}
+.demo-card:hover{border-color:var(--cyan-line);background:#111a2c}
+.demo-card.sel{border-color:var(--cyan);background:linear-gradient(180deg,rgba(57,215,255,.1),var(--panel2))}
+.demo-card .dt{font-size:14px;font-weight:700}
+.demo-card .db{font-size:12px;color:var(--dim);line-height:1.5;flex:1}
+.demo-card .de{font-size:10.5px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase}
+
+/* ============================== identity ============================== */
+.idgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:640px){.idgrid{grid-template-columns:1fr}}
+.did-box{
+  border:1px solid var(--line);border-radius:8px;background:var(--panel2);padding:14px;min-width:0;
+}
+.did-box .dlabel{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;font-weight:700}
+.did-box code{font-size:12px;color:var(--cyan);word-break:break-all;word-wrap:anywhere;display:block}
+.keywarn{
+  border:1px solid rgba(255,181,71,.4);background:var(--amber-bg);border-radius:8px;
+  padding:12px 14px;font-size:12px;color:var(--amber);line-height:1.6;margin-top:12px;
+}
+.keywarn b{font-weight:700}
+
+/* ============================== misc ============================== */
+.notice{font-size:12.5px;color:var(--dim);border:1px dashed var(--line);border-radius:8px;padding:12px 14px;line-height:1.6}
+.notice b{color:var(--ink)}
+.hidden{display:none!important}
+.fade-in{animation:fadeUp .35s ease both}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.spin{display:inline-block;width:13px;height:13px;border:2px solid var(--cyan);border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px}
+@keyframes spin{to{transform:rotate(360deg)}}
+footer{
+  border-top:1px solid var(--line);margin-top:60px;padding:26px 0 10px;
+  font-size:11.5px;color:var(--faint);line-height:1.8;
+}
+footer .fdis{max-width:820px}
+.toast{
+  position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);
+  background:var(--panel2);border:1px solid var(--cyan-line);color:var(--ink);
+  border-radius:8px;padding:11px 18px;font-size:13px;opacity:0;pointer-events:none;
+  transition:opacity .2s,transform .2s;z-index:50;max-width:calc(100vw - 32px);text-align:center;
+}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast.err{border-color:rgba(255,92,108,.5)}
+hr.sep{border:none;border-top:1px solid var(--line);margin:34px 0}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ============================ 00 · HERO ============================ -->
+<header class="hero">
+  <div class="hero-eyebrow">
+    <span class="dot" aria-hidden="true"></span>
+    <span>gendid/1 · independent prototype</span>
+    <span>·</span>
+    <span>technocore.chat signed lane</span>
+    <span>·</span>
+    <span>GenLayer studionet adjudication</span>
+  </div>
+  <h1>Gen<span class="tick">Did</span></h1>
+  <p class="hero-sub"><strong>DID Agreement Judge</strong> — where signed agent conversations become verifiable agreements.</p>
+  <p class="hero-sub">GenDid reads a cryptographically signed agent transcript, deterministically verifies every identity claim, then asks a decentralized validator set what the agents actually agreed to. No escrow, no settlement — the ruling is the product.</p>
+  <div class="layers">
+    <div class="layer">
+      <div class="ln">Layer 01 — cryptography</div>
+      <h3>Cryptography proves <em>who</em> said it.</h3>
+      <p>Every message carries an Ed25519 <span style="color:var(--ink)">did:key</span> signature over <span style="color:var(--ink)">&lt;room&gt;|&lt;nonce&gt;|&lt;text&gt;</span>. Verification is deterministic math — no oracle, no trust.</p>
+    </div>
+    <div class="layer">
+      <div class="ln">Layer 02 — transcript</div>
+      <h3>The transcript shows <em>what</em> was said.</h3>
+      <p>technocore.chat rooms hold the byte-exact record: sequence, timestamp, DID, text, nonce, signature. Unsigned chatter stays visible but can never establish a commitment.</p>
+    </div>
+    <div class="layer">
+      <div class="ln">Layer 03 — adjudication</div>
+      <h3>GenLayer adjudicates <em>what was agreed</em>.</h3>
+      <p>A leader proposes, validators independently re-run, and the contract — not the model — derives the final status from the labels. Consensus decides, math guards it.</p>
+    </div>
+  </div>
+</header>
+
+<hr class="sep">
+
+<!-- ============================ 01 · IDENTITY ============================ -->
+<section id="sec-identity" aria-labelledby="h-identity">
+  <div class="sec-head">
+    <span class="sec-no">01</span>
+    <h2 id="h-identity">Agent identity</h2>
+    <span class="hint">did:key · Ed25519 · keys stay in this browser</span>
+  </div>
+  <div class="card">
+    <div class="btnrow" style="margin-bottom:16px">
+      <button class="btn" id="btn-id-new">Generate new agent DID</button>
+      <button class="btn" id="btn-id-export">Export DID document</button>
+    </div>
+    <div class="idgrid">
+      <div class="did-box">
+        <div class="dlabel">Local DID (did:key)</div>
+        <code id="id-local" class="mono-s">—</code>
+      </div>
+      <div class="did-box">
+        <div class="dlabel">Public identity (multibase)</div>
+        <code id="id-pub" class="mono-s">—</code>
+      </div>
+    </div>
+    <div style="margin-top:12px" class="kv">
+      <span class="k">Verification method</span><span class="v dim mono-s" id="id-method">Ed25519VerificationKey2020 · did:key:z6Mk… (self-certifying — the identifier IS the key)</span>
+      <span class="k">Key state</span><span class="v"><span class="pill ok" id="id-status"><span class="g">✓</span> KEY PRESENT · LOCAL</span></span>
+      <span class="k">Storage</span><span class="v dim mono-s">localStorage (this browser only) — never transmitted, never logged, never included in receipts</span>
+    </div>
+    <div class="keywarn" role="note">
+      <b>Key safety:</b> your signing seed is generated in this browser and stored only in this browser's localStorage. GenDid never displays, transmits, or embeds the private seed anywhere — not in evidence, not in receipts, not on-chain. Clearing site data destroys the identity; there is no recovery, because there is no server.
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 02 · TRANSCRIPT ============================ -->
+<section id="sec-transcript" aria-labelledby="h-transcript">
+  <div class="sec-head">
+    <span class="sec-no">02</span>
+    <h2 id="h-transcript">Transcript input</h2>
+    <span class="hint">paste · demo · or load a live technocore room</span>
+  </div>
+
+  <div class="card">
+    <h4>Load source</h4>
+    <div class="fieldrow">
+      <div class="fld-block">
+        <label class="fld" for="tc-room">Technocore room name</label>
+        <input type="text" id="tc-room" placeholder="e.g. gendid-demo-01" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="fld-block" style="display:flex;align-items:flex-end">
+        <button class="btn" id="btn-tc-load" style="width:100%">Fetch live room</button>
+      </div>
+    </div>
+    <div class="btnrow">
+      <button class="btn" data-demo="clear">Demo A · Clear agreement</button>
+      <button class="btn" data-demo="dispute">Demo B · Contradiction</button>
+      <button class="btn" data-demo="ambiguous">Demo C · Ambiguous</button>
+    </div>
+    <p class="notice" style="margin-top:12px">Paste a signed transcript as JSON (array of records with <b>sequence · timestamp · senderDid · nonce · signature · text</b>, or technocore <b>?format=json</b> messages with seq/ts/from/text/nonce/sig). Try the demos first — they are really signed in-browser.</p>
+    <div class="fld-block">
+      <label class="fld" for="transcript-input">Transcript JSON</label>
+      <textarea id="transcript-input" class="tall" spellcheck="false" placeholder='[
+  {"sequence":1,"timestamp":"…","senderDid":"did:key:z6Mk…","nonce":"1757…","signature":"86-char-base64url…","text":"I need … 5 credits."},
+  {"sequence":2, …, "text":"Accepted."}
+]'></textarea>
+    </div>
+  </div>
+
+  <div class="card" id="records-card" hidden>
+    <h4>Records <span style="text-transform:none;letter-spacing:0;color:var(--faint)" id="records-note"></span></h4>
+    <div class="rec-list" id="rec-list"></div>
+  </div>
+</section>
+
+<!-- ============================ 03 · EVIDENCE VERIFICATION ============================ -->
+<section id="sec-verify" aria-labelledby="h-verify">
+  <div class="sec-head">
+    <span class="sec-no">03</span>
+    <h2 id="h-verify">Evidence verification</h2>
+    <span class="hint">deterministic · client-side · same canonical string as the contract</span>
+  </div>
+  <div class="card">
+    <button class="btn primary big" id="btn-verify">Verify Transcript</button>
+    <div id="verify-out" class="hidden" style="margin-top:16px">
+      <div class="counters">
+        <div class="counter mute"><div class="n" id="c-total">0</div><div class="l">Total records</div></div>
+        <div class="counter ok"><div class="n" id="c-auth">0</div><div class="l">✓ Authentic signed</div></div>
+        <div class="counter warn"><div class="n" id="c-uns">0</div><div class="l">⚠ Unsigned</div></div>
+        <div class="counter bad"><div class="n" id="c-inv">0</div><div class="l">✕ Invalid sig</div></div>
+        <div class="counter bad"><div class="n" id="c-mal">0</div><div class="l">⚠ Malformed</div></div>
+        <div class="counter info"><div class="n" id="c-dup">0</div><div class="l">Duplicate</div></div>
+      </div>
+      <div class="kv" style="margin-top:16px">
+        <span class="k">Evidence hash (sha256, gendid/1)</span>
+        <span class="v hashline"><code id="e-hash">—</code><button class="copybtn" data-copy="e-hash">copy</button></span>
+        <span class="k">Agreement ID</span>
+        <span class="v hashline"><code id="e-aid">—</code><button class="copybtn" data-copy="e-aid">copy</button></span>
+        <span class="k">Verification engine</span>
+        <span class="v dim mono-s">tweetnacl Ed25519 · canonical string &lt;room&gt;|&lt;nonce&gt;|&lt;swept-text&gt; — byte-parity with the on-chain contract (tested)</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 04 · AGREEMENT ANALYSIS ============================ -->
+<section id="sec-analyze" aria-labelledby="h-analyze" hidden>
+  <div class="sec-head">
+    <span class="sec-no">04</span>
+    <h2 id="h-analyze">Agreement analysis</h2>
+    <span class="hint">advisory candidate — grounded only in authenticated records</span>
+  </div>
+  <div class="card" id="candidate-card">
+    <h4>Candidate agreement (deterministic parser)</h4>
+    <div class="kv" id="candidate-kv"></div>
+    <p class="notice" style="margin-top:12px">This candidate is a <b>hint</b> for the adjudicator, never the verdict. Fields not explicitly present in authenticated records are shown as <span style="color:var(--faint)">not stated</span> — GenDid never invents terms.</p>
+  </div>
+  <div class="card">
+    <h4>Adjudication questions</h4>
+    <div class="qgrid">
+      <div class="qrow"><span class="qq"><span class="qn">Q1 two_or_more_participants</span><br><span class="qd">Are ≥2 distinct authenticated DIDs present?</span></span><span class="pill mute" id="q-two_or_more_participants">—</span></div>
+      <div class="qrow"><span class="qq"><span class="qn">Q2 offer_present</span><br><span class="qd">Does an authenticated record contain a concrete offer?</span></span><span class="pill mute" id="q-offer_present">—</span></div>
+      <div class="qrow"><span class="qq"><span class="qn">Q3 acceptance_present</span><br><span class="qd">Does a different authenticated DID accept?</span></span><span class="pill mute" id="q-acceptance_present">—</span></div>
+      <div class="qrow"><span class="qq"><span class="qn">Q4 acceptance_matches_offer</span><br><span class="qd">Does the acceptance respond to the offered terms?</span></span><span class="pill mute" id="q-acceptance_matches_offer">—</span></div>
+      <div class="qrow"><span class="qq"><span class="qn">Q5 no_contradiction</span><br><span class="qd">No later authenticated cancellation/rejection?</span></span><span class="pill mute" id="q-no_contradiction">—</span></div>
+      <div class="qrow"><span class="qq"><span class="qn">Q6 evidence_grounded</span><br><span class="qd">Do all cited record ids exist and authenticate?</span></span><span class="pill mute" id="q-evidence_grounded">—</span></div>
+    </div>
+    <p class="notice" style="margin-top:12px">Labels come from the adjudication run (live path) or the deterministic local analysis (demo path) — always recomputed and clamped by the contract before the final status is derived.</p>
+  </div>
+</section>
+
+<!-- ============================ 05 · GENLAYER ADJUDICATION ============================ -->
+<section id="sec-adjudicate" aria-labelledby="h-adjudicate" hidden>
+  <div class="sec-head">
+    <span class="sec-no">05</span>
+    <h2 id="h-adjudicate">GenLayer adjudication</h2>
+    <span class="hint" id="mode-hint">status panel</span>
+  </div>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
+      <span class="mode-tag local" id="mode-tag">LOCAL / DEMO MODE</span>
+      <span style="font-size:11px;color:var(--faint)" id="gl-note">no contract address configured — adjudication runs the same derivation locally</span>
+    </div>
+    <button class="btn primary big" id="btn-judge" style="margin-bottom:6px">Judge Agreement</button>
+    <div class="pipe hidden" id="pipe" style="margin-top:14px">
+      <div class="pipe-step" data-step="prepare"><span><span class="pt">Preparing evidence</span><div class="pd" id="pd-prepare">Building canonical package…</div></span></div>
+      <div class="pipe-step" data-step="submit"><span><span class="pt">Submitting to GenLayer</span><div class="pd" id="pd-submit">—</div></span></div>
+      <div class="pipe-step" data-step="adj"><span><span class="pt">Adjudicating</span><div class="pd" id="pd-adj">—</div></span></div>
+      <div class="pipe-step" data-step="consensus"><span><span class="pt">Consensus</span><div class="pd" id="pd-consensus">—</div></span></div>
+      <div class="pipe-step" data-step="final"><span><span class="pt">Final result</span><div class="pd" id="pd-final">—</div></span></div>
+    </div>
+    <p class="notice" style="margin-top:14px" id="gl-explain">LOCAL / DEMO MODE: the GenLayer contract is not configured yet, so this run derives the status with the <b>same deterministic matrix</b> the contract uses, plus a local heuristic labeler for the semantic questions. When a Studionet contract address is set, this panel shows real transaction information only.</p>
+  </div>
+
+  <!-- result -->
+  <div class="result hidden" id="result" style="margin-top:12px" role="status" aria-live="polite">
+    <div class="r-status" id="result-status">—</div>
+    <div class="r-sub" id="result-sub">—</div>
+    <div class="r-error" id="result-error" hidden></div>
+  </div>
+</section>
+
+<!-- ============================ 06 · WHY ============================ -->
+<section id="sec-why" aria-labelledby="h-why" hidden>
+  <div class="sec-head">
+    <span class="sec-no">06</span>
+    <h2 id="h-why">Why? — evidence explanation</h2>
+    <span class="hint">every conclusion links to exact records</span>
+  </div>
+  <div class="card">
+    <div id="why-body"></div>
+  </div>
+</section>
+
+<!-- ============================ 07 · RECEIPT ============================ -->
+<section id="sec-receipt" aria-labelledby="h-receipt" hidden>
+  <div class="sec-head">
+    <span class="sec-no">07</span>
+    <h2 id="h-receipt">Agreement receipt</h2>
+    <span class="hint">verifiable — re-check every signature locally</span>
+  </div>
+  <div class="receipt">
+    <div class="r-head">
+      <h3>GenDid Agreement Receipt</h3>
+      <span class="pill info" id="receipt-status-pill">—</span>
+    </div>
+    <div class="r-sec">
+      <h4>Header</h4>
+      <div class="kv">
+        <span class="k">Agreement ID</span><span class="v hashline"><code id="r-aid">—</code><button class="copybtn" data-copy="r-aid">copy</button></span>
+        <span class="k">Protocol</span><span class="v dim mono-s">gendid/1 · independent prototype</span>
+        <span class="k">Status</span><span class="v" id="r-status">—</span>
+        <span class="k">Transcript room</span><span class="v mono-s" id="r-room">—</span>
+        <span class="k">Adjudication state</span><span class="v mono-s" id="r-state">—</span>
+        <span class="k">Issued at</span><span class="v mono-s" id="r-issued">—</span>
+      </div>
+    </div>
+    <div class="r-sec">
+      <h4>Cryptographic verification <span style="color:var(--faint);text-transform:none;letter-spacing:0">— deterministic, done locally by this page and re-done by the contract</span></h4>
+      <div class="kv">
+        <span class="k">Evidence hash</span><span class="v hashline"><code id="r-hash">—</code><button class="copybtn" data-copy="r-hash">copy</button></span>
+        <span class="k">Participants (authenticated DIDs)</span><span class="v mono-s" id="r-parts">—</span>
+        <span class="k">Record counts</span><span class="v dim mono-s" id="r-counts">—</span>
+        <span class="k">Relevant record IDs</span><span class="v mono-s" id="r-recs">—</span>
+        <span class="k">Verification engine</span><span class="v dim mono-s">Ed25519 (tweetnacl) over &lt;room&gt;|&lt;nonce&gt;|&lt;swept-text&gt; — byte-parity with the contract's vendored verifier</span>
+      </div>
+    </div>
+    <div class="r-sec sec-g">
+      <h4>GenLayer adjudication <span style="color:var(--faint);text-transform:none;letter-spacing:0">— consensus semantics; never a claim of cryptographic proof</span></h4>
+      <div class="kv">
+        <span class="k">Mode</span><span class="v" id="r-mode">—</span>
+        <span class="k">Accepted terms</span><span class="v mono-s" id="r-terms">—</span>
+        <span class="k">Question labels</span><span class="v mono-s" id="r-labels">—</span>
+        <span class="k">GenLayer transaction</span><span class="v mono-s" id="r-tx">—</span>
+        <span class="k">Adjudication summary</span><span class="v dim" id="r-summary">—</span>
+        <span class="k">Error reason</span><span class="v mono-s" id="r-err">—</span>
+      </div>
+      <div class="disc">Consensus (when live) is GenLayer protocol-level Optimistic Democracy: leader proposes, validators independently re-run and compare decision-bearing fields. Finality and appeals are tracked by GenLayer, not by this app. This receipt never claims the adjudication is a cryptographic proof — it is a consensus ruling over authenticated evidence.</div>
+    </div>
+    <div class="receipt-actions">
+      <button class="btn" id="btn-copy-receipt">Copy receipt JSON</button>
+      <button class="btn" id="btn-download-receipt">Download receipt (.json)</button>
+    </div>
+  </div>
+</section>
+
+<hr class="sep">
+
+<!-- ============================ 08 · DEMOS ============================ -->
+<section id="sec-demos" aria-labelledby="h-demos">
+  <div class="sec-head">
+    <span class="sec-no">08</span>
+    <h2 id="h-demos">Demo scenarios</h2>
+    <span class="hint">signed live in your browser — reload as often as you like</span>
+  </div>
+  <div class="demo-grid">
+    <button class="demo-card" data-demo="clear">
+      <span class="dt">A · Clear agreement</span>
+      <span class="db">Concrete offer (JSON output, 30s latency, 5 credits) + matching acceptance + handshake. Expect AGREED.</span>
+      <span class="de">Expected: AGREED</span>
+    </button>
+    <button class="demo-card" data-demo="dispute">
+      <span class="dt">B · Contradiction / dispute</span>
+      <span class="db">Offer + acceptance, then an authenticated cancellation from the acceptor. Fulfillment was never asserted — the contradiction voids the deal. Expect NOT_AGREED.</span>
+      <span class="de">Expected: NOT_AGREED</span>
+    </button>
+    <button class="demo-card" data-demo="ambiguous">
+      <span class="dt">C · Ambiguous agreement</span>
+      <span class="db">"Maybe we could work together sometime" + "sounds good I guess" + unsigned noise. No concrete terms anywhere. Expect AMBIGUOUS or INSUFFICIENT_EVIDENCE.</span>
+      <span class="de">Expected: AMBIGUOUS / INSUFFICIENT_EVIDENCE</span>
+    </button>
+  </div>
+  <p class="notice" style="margin-top:12px">Demos are signed <b>in your browser</b> at click time with fixed public demo seeds — every signature genuinely verifies. Nothing here fakes GenLayer consensus: in demo mode the status is derived by the same deterministic matrix the contract runs, from locally-computed labels.</p>
+</section>
+
+<footer>
+  <div class="fdis"><b>GenDid — DID Agreement Judge</b> · gendid/1 · independent prototype. Not a FLOP Labs, Technocore, or GenLayer Labs project; no endorsement, partnership, or integration is claimed. DID signature verification is deterministic cryptography; GenLayer adjudicates the meaning and consistency of authenticated evidence. Not a truth oracle, not a fulfillment oracle, not a settlement protocol — no escrow, no payments, no FLOP rails. tclk frames are displayed as structured evidence only. Private keys never leave your browser.</div>
+  <div style="margin-top:8px">technocore.chat transcripts · GenLayer consensus derivation · sha256 evidence hash</div>
+</footer>
+
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="lib/tweetnacl.min.js"></script>
+<script src="lib/gendid-lib.js"></script>
+<script src="demos.js"></script>
+<script src="contract-address.js"></script>
+<script src="lib/genlayer-sdk.bundle.js"></script>
+<script src="gendid-app.js"></script>
+</body>
+</html>
