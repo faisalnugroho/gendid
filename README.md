@@ -1,18 +1,25 @@
 # GenDid — DID Agreement Judge
 
-**gendid/1** · independent prototype
+**gendid/1.1** · independent prototype
 
 GenDid determines **what DID-authenticated agents actually agreed to**, from
 their cryptographically signed technocore.chat transcript, adjudicated by
 GenLayer validator consensus.
 
 > Live on GenLayer StudioNet: contract
-> [`0xb86505e421cfc256df41900c0c1203cBD26415bf`](https://explorer-studio.genlayer.com/address/0xb86505e421cfc256df41900c0c1203cBD26415bf)
-> — deployed, smoke-tested, and browser-verified end-to-end (see
+> [`0xF3A0Fc40Cc75FbCb9Ae24E1250D67cEe5A13158a`](https://explorer-studio.genlayer.com/address/0xF3A0Fc40Cc75FbCb9Ae24E1250D67cEe5A13158a)
+> — gendid/1.1 steward-hardened build, deployed, smoke-tested (incl. the
+> live Steward attack rejection), and browser-verified end-to-end (see
 > [Verified live results](#verified-live-results) and
 > [docs/LIVE_DEPLOYMENT.md](docs/LIVE_DEPLOYMENT.md)).
 >
 > **Try it: https://faisalnugroho.github.io/gendid/**
+>
+> The pre-hardening `0xb865…` deployment is preserved in
+> [docs/LIVE_DEPLOYMENT.md](docs/LIVE_DEPLOYMENT.md) as history; the
+> steward-hardened contract replaced it because the fix changes verified
+> code (strict Ed25519 validation, order binding, grounding gates —
+> see [docs/SECURITY.md](docs/SECURITY.md)).
 
 ---
 
@@ -184,17 +191,25 @@ contracts, not to read or to write agreements on StudioNet (no gas charge).
 ### Tests
 
 ```bash
-# 20 direct contract tests (gltest direct mode; mocks the LLM, real crypto)
+# 50 direct contract tests (gltest direct mode; mocks the LLM, real crypto)
+#   20 adjudication + 16 adversarial Ed25519 + 10 transcript-order binding
 pytest tests/direct/ -q
 
-# 24 JS/Python parity tests (browser lib vs contract canonicalization)
+# 48 JS/Python parity checks (browser lib vs contract canonicalization)
+#   25 targeted parity checks + 23-fixture dual-runner corpus
+#   (valid, unsigned, malformed, every reject reason, attack material,
+#    permutations — full-output byte-equality per fixture)
 node tests/js/test-parity.mjs
+
+# Steward attack reproducer (identity-point key + zero-scalar signature,
+# all 8 torsion points, arbitrary message) — all must print REJECTED
+python3 scripts/attack_repro.py contracts/gendid_judge.py
 ```
 
 Requirements: Python 3.12+, `pytest`, `gltest`, `cryptography` (test only),
 Node 22+ for parity tests. The vendored contract verifier and the browser
-tweetnacl verifier must accept the same signatures — that equivalence is what
-the parity suite pins.
+tweetnacl verifier must accept the same signatures and reject the same
+forgeries — that equivalence is what the parity suite and corpus pin.
 
 ### Reproduce the demo
 
@@ -215,17 +230,19 @@ the parity suite pins.
 ```
 contracts/gendid_judge.py     the Intelligent Contract (evidence model + judge)
 frontend/                     zero-backend static dApp
-  lib/gendid-lib.js           DID kit, verification, canonicalization (byte-parity with the contract)
+  lib/gendid-lib.js           DID kit, strict verification, canonicalization (byte-parity with the contract)
   lib/tweetnacl.min.js        Ed25519 (vendored)
   lib/genlayer-sdk.bundle.js  GenLayer browser SDK (vendored)
   contract-address.js         pinned StudioNet contract address
   demos.js                    the three demo scenarios (public demo seeds)
-docs/PROTOCOL.md              protocol specification
+docs/PROTOCOL.md              protocol specification (gendid/1.1)
+docs/SECURITY.md              security model + steward-fix → test map
 docs/LIVE_DEPLOYMENT.md       verified live deployment record
 scripts/deploy_smoke.py       deployment + live smoke test harness
 scripts/error_probes.py       live error-path probes
-tests/direct/                 20 direct-mode contract tests
-tests/js/                     24 JS/Python parity tests
+scripts/attack_repro.py       Steward-finding attack reproducer
+tests/direct/                 50 direct-mode contract tests
+tests/js/                     48 JS/Python parity checks incl. 23-fixture corpus
 ```
 
 ## Security notes

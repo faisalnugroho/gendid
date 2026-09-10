@@ -1,8 +1,10 @@
 # GenDid Protocol — Evidence, Verification and Adjudication Model
 
-**Protocol id: `gendid/1`** — independent prototype (see README disclaimer).
+**Protocol id: `gendid/1.1`** (Sep 2026 steward-hardening: strict Ed25519 validation,
+transcript order binding, grounded consensus, browser/contract parity corpus) —
+independent prototype (see README disclaimer).
 Sources followed: technocore-chat `/llms.txt` + `scripts/sign.py` (main branch, 2026-09),
-tclk `SPEC.md` (tclk/1), GenLayer docs (docs.genlayer.com, 2026-09).
+tclk `SPEC.md` (tclk/1), GenLayer docs (docs.genlayer.com, 2026-09), RFC 8032 (Ed25519).
 
 ---
 
@@ -102,35 +104,65 @@ derived later but the original evidence is always retained.
 
 Rules:
 - Only `AUTHENTIC_SIGNED` records count as identity-attributed evidence.
-- Nonce must be strictly increasing **per (room, did)** across authentic records; a
-  regression marks the offending record `INVALID_SIGNATURE` (nonce-replay guard mirroring
-  technocore semantics). A duplicate (identical did+nonce+sig) is `DUPLICATE`, not replay.
+- **Strict Ed25519 validation (gendid/1.1)**: a record is `AUTHENTIC_SIGNED` only if
+  the public key and the signature's R point are on the prime-order subgroup
+  (identity point and all 8 small-order encodings rejected), the point encodings
+  are canonical (no y ≥ p forms), the scalar S is canonical (S < group order L,
+  S ≠ 0), and the signature is canonical unpadded base64url. The Steward attack
+  (identity-point key + zero-scalar signature accepts arbitrary messages) is
+  rejected at the verifier level; regression-tested in
+  `tests/direct/test_adversarial_ed25519.py` (16 tests) and mirrored by the
+  browser verifier (parity corpus).
+- Nonce must be strictly increasing **per (room, did)** across authentic records;
+  a regression marks the offending record `INVALID_SIGNATURE` (nonce-replay
+  guard mirroring technocore semantics). A duplicate (identical did+nonce+sig)
+  is `DUPLICATE`, not replay.
+- **Canonical scan order (gendid/1.1)**: before classification, the raw record
+  array is sorted into a deterministic content order (see `_raw_sort_key` in the
+  contract / `rawSortKey` in the browser lib). Consequence: the input ARRAY
+  order can never influence recordIds, duplicate detection, nonce-monotonicity
+  rejections, or the evidence hash — validators (or honest clients) reading the
+  same room in any order classify byte-identically. Unsigned venue metadata
+  (`sequence`, `timestamp`) is NOT cryptographically signed by technocore's
+  signature payload (which covers `room|nonce|swept-text` only); GenDid never
+  claims otherwise.
 - Records missing `sig` are `UNSIGNED`, never "invalid": technocore's manual explicitly
   says pre-`sig` records are "not re-verifiable", not "invalid".
 - Empty transcript / zero authentic records never reaches the LLM — deterministic
   `INSUFFICIENT_EVIDENCE`.
 
-### 3.3 EvidencePackage (gendid/1)
+### 3.3 EvidencePackage (gendid/1.1) + transcript order commitment
 
 ```json
 {
-  "protocolVersion": "gendid/1",
-  "participants": ["did:key:z6Mk...", "did:key:z6Mk..."],
+  "protocolVersion": "gendid/1.1",
   "transcriptRoom": "gendid-demo-01",
-  "records": [ <canonical records, ascending sequence> ],
-  "agreementCandidate": {
-    "participants": [...],
-    "terms": [ {"key": "task", "value": "..."}, ... ],
-    "evidenceRecords": ["gdr-...-1021", "gdr-...-1022"]
-  },
-  "requestedDecision": "AGREEMENT_STATUS",
-  "optionalExternalEvidence": []
+  "transcriptCommitment": "<sha256 hash-chain root, hex>",
+  "records": [ <canonical records, canonical total order> ]
 }
 ```
 
+**Transcript order commitment (gendid/1.1).** After classification, the
+AUTHENTIC records are totally ordered by `(nonce int, sequence, recordId)` and
+chained: `tc_0 = sha256("gendid/1.1|<room>")`, `tc_i = sha256(tc_{i-1} + "|" +
+canonical_json(record_i))`. The final `tc_n` is the **transcriptCommitment** —
+stored on-chain, printed in the consensus prompt, and part of the evidence
+hash. Any reorder/insert/delete of an authenticated record changes it
+deterministically (tests `test_o1`–`test_o10`); per-record `orderIndex` and
+`orderCommit` make each record's position in the chain individually
+verifiable. Which ordering is *signed* vs *added*: the technocore signature
+commits to the signer's per-record nonce (so the per-signer chronology is
+cryptographically bound); venue `sequence`/`ts` are unsigned metadata; the
+cross-record chain is GenDid's addition on top of authenticated content.
+
 `evidenceHash` = `sha256( canonical_json(EvidencePackage) )`, hex. Canonical JSON =
 sorted keys, separators `,`/`:` (`json.dumps(..., sort_keys=True, separators=(",", ":"))`),
-ensuring byte-identical hashing in JS and Python (tested both directions).
+ensuring byte-identical hashing in JS and Python — **proven over a 23-fixture
+dual-runner corpus** (valid, unsigned, malformed, all reject categories,
+attack material, permutations) in `tests/js/test-parity.mjs` T7, where every
+fixture's full canonical record list, counts, rejections, participants,
+commitment, evidenceHash, and agreementId are byte-identical across the two
+implementations.
 
 ### 3.4 Evidence boundary (mandatory)
 

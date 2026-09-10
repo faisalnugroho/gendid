@@ -42,6 +42,30 @@ _L = 723700557733226221397318656304299424085711635937990760600195093828545425098
 _D = -121665 * pow(121666, _P - 2, _P) % _P
 _GY = 4 * pow(5, _P - 2, _P) % _P
 
+# The complete 8-torsion subgroup of edwards25519 (points P with [8]P == O),
+# as canonical compressed encodings. Derived and self-verified by
+# scripts/derive_torsion.py against this file's own group arithmetic
+# (method: T = [L]R for an on-curve R gives a point of order 8; the subgroup
+# <T> is the full 8-torsion). Cross-checked against the RFC 8032 / literature
+# constants: 0100..00 (identity), ecff..ff7f (order 2), 26e8958f..05/.85,
+# c7176a70..3a/..fa (order 8), 0000..00/..80 (order 4).
+# Any A or R in this set proves NOTHING about key control: for a small-order
+# key A a signature (R, s) can be solved without any secret (see
+# docs/SECURITY.md), so strict verification MUST reject them outright.
+_SMALL_ORDER_ENC = frozenset(
+    bytes.fromhex(h)
+    for h in (
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000080",
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    )
+)
+
 
 def _sha256(data: bytes) -> bytes:
     import hashlib
@@ -113,22 +137,47 @@ def _point_decompress(s: bytes):
     sign = y >> 255
     y &= (1 << 255) - 1
     if y >= _P:
-        return None
+        return None  # non-canonical field element encoding
     try:
         x = _xrecover(y)
     except ValueError:
         return None
     if x & 1 != sign:
         x = _P - x
-    if x == 0 and sign == 1:
+    # x=0 has canonical sign 0 only. When x=0 and sign=1 the flip above
+    # yields x == _P (≡ 0 mod p) — the SAME point under a non-canonical
+    # encoding, so reject BOTH forms (the old `x == 0` test could never
+    # fire because x had already been flipped to _P).
+    if (x == 0 or x == _P) and sign == 1:
         return None  # non-canonical
+    # y in {0, 1, p-1} occurs ONLY at torsion points (y=0: x=±sqrt(-1),
+    # order 4; y=±1: x=0, order 4/1) — no legitimate key or R ever lands
+    # here. Defense-in-depth behind the _SMALL_ORDER_ENC set check.
+    if y in (0, 1, _P - 1):
+        return None
     return (x, y, 1, (x * y) % _P)
 
 
 def ed25519_verify(public: bytes, msg: bytes, sig: bytes) -> bool:
-    """RFC 8032 Ed25519 verification (strict: canonical S, canonical A)."""
+    """Strict RFC 8032 Ed25519 verification.
+
+    Strict checks (all MUST hold; each defeats a concrete forgery class):
+      1. A decodes, y < p, x=0/sign=1 non-canonical forms rejected.
+      2. A is NOT in the 8-torsion subgroup (small-order / identity key).
+         Otherwise (R,s) can be solved without the private key
+         (identity A + R=identity + s=0 verifies for EVERY message).
+      3. R decodes, same canonicality constraints as A.
+      4. R is NOT small-order (R=-[k]A solvable for torsion A/R pairs).
+      5. s is canonical: 0 <= s < L (rejects malleability s+L which preserves
+         the equation [s]B = R + [k]A while altering the signature bytes).
+      6. [s]B == R + [k]A (the RFC 8032 equation itself).
+    """
     if len(sig) != 64 or len(public) != 32:
         return False
+    if public in _SMALL_ORDER_ENC:
+        return False  # small-order A incl. the identity point
+    if sig[:32] in _SMALL_ORDER_ENC:
+        return False  # small-order R
     a = _point_decompress(public)
     if a is None:
         return False
@@ -137,7 +186,11 @@ def ed25519_verify(public: bytes, msg: bytes, sig: bytes) -> bool:
         return False
     s = int.from_bytes(sig[32:], "little")
     if s >= _L:
-        return False
+        return False  # non-canonical scalar
+    if s == 0:
+        return False  # zero-scalar: with torsion A/R already excluded this is
+        # redundant defense-in-depth; a genuine Ed25519 signature never has
+        # s == 0 (probability 2^-252)
     import hashlib as _hl
 
     h = _hl.sha512(sig[:32] + public + msg).digest()
@@ -181,10 +234,56 @@ def did_to_pubkey(did: str):
     return decoded[2:]
 
 # ---------------------------------------------------------------------------
-# Evidence model (gendid/1)
+# Evidence model (gendid/1.1)
+#
+# CANONICALIZATION SPEC (single authoritative definition; the browser mirror
+# in frontend/lib/gendid-lib.js implements byte-identical rules — enforced by
+# the parity fixture corpus in tests/js/):
+#
+# Input: JSON array of raw records. For each element (input index i):
+#   * non-object element        -> NO canonical record; counts.MALFORMED++;
+#                                  rejections["x<i>"] = "not an object"
+#   * sequence                 -> valid iff integral, 0 <= seq <= 2^53-1
+#                                  (outside JS Number precision = not canonical);
+#                                  invalid -> sequence=null, class MALFORMED
+#   * senderDid/text           -> kept iff str, else ""
+#   * signature/nonce          -> both absent/empty -> UNSIGNED
+#                                  otherwise full validation:
+#                                  did regex, nonce regex, sig regex,
+#                                  strict Ed25519 verify over <room>|<nonce>|<sweep>,
+#                                  canonical base64url re-encode equality,
+#                                  per-sender strictly-increasing nonce,
+#                                  content-duplicate (replay of an AUTHENTIC
+#                                  record) -> DUPLICATE
+#   * recordId                 -> "gdr-<room>-<seq>"; on collision (same seq,
+#                                  input order) "-2", "-3", ... appended
+#                                  -> unique by construction
+#   * sequence=true/false/null/1.5/unsafe -> sequence=null, MALFORMED
+#
+# CANONICAL ORDER (total, identical in Python and JS):
+#   1. AUTHENTIC records by (int(nonce), sequence, recordId) ascending —
+#      the signer's nonce is the only per-record value the SIGNATURE itself
+#      covers, so nonce is the primary order key ("cryptographically bound
+#      ordering" for what the signature commits; venue sequence is metadata
+#      and is only a tiebreak, documented as NOT signed).
+#   2. All other records (DUPLICATE/UNSIGNED/INVALID_SIGNATURE/MALFORMED) by
+#      (seq-missing flag, sequence, recordId) ascending — context only.
+#   orderIndex = 1..N over this total order.
+#
+# ORDER COMMITMENT (gendid/1.1 hash chain, computed over AUTHENTIC records in
+# canonical order):
+#   tc_0 = sha256("gendid/1.1|<room>")
+#   tc_i = sha256(tc_{i-1} + "|" + canonical_json(record_i_core))
+#   (record_i_core = the canonical record without orderIndex/orderCommit)
+#   transcriptCommitment = tc_last. Each authentic record stores its tc_i in
+#   orderCommit. Reordering, inserting, deleting or duplicating authentic
+#   records changes the commitment deterministically; all validators derive
+#   the identical chain from the same package.
 # ---------------------------------------------------------------------------
 
 TC_SWEEP_CATEGORIES = ("Cc", "Cf", "Cs", "Co", "Zl", "Zp")
+
+_MAX_SEQ = (1 << 53) - 1  # JS Number.MAX_SAFE_INTEGER; beyond = not canonical
 
 
 def tc_sweep(text: str) -> str:
@@ -261,18 +360,128 @@ def _load_records_arg(records_json: str) -> list:
     return parsed
 
 
-def _classify_records(room: str, raw_records: list) -> dict:
-    """Deterministic classification. Returns dict with:
-    records: canonical list (ascending sequence), authentic_ids: set,
-    participants: sorted list of authentic DIDs, counts, rejections: dict
-    recordId -> class.
+def _is_canonical_seq(v) -> bool:
+    """sequence is canonical iff integral and within JS Number precision.
+
+    Integral floats (1.0) are accepted and normalized to int: in JS,
+    1.0 === 1 (Number.isInteger(1.0) is true), so the Python side must
+    classify identically for browser/contract parity — JSON parsers on the
+    two sides otherwise disagree on the same bytes.
     """
-    seen: dict = {}
-    last_nonce: dict = {}
-    out = []
-    authentic_ids: set = set()
-    participants: set = set()
-    authentic_by_id: dict = {}
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, int):
+        return 0 <= v <= _MAX_SEQ
+    if isinstance(v, float):
+        return v.is_integer() and 0 <= int(v) <= _MAX_SEQ
+    return False
+
+
+def _raw_sort_key(entry):
+    """Canonical pre-sort key: the CANONICAL SCAN ORDER (gendid/1.1).
+
+    Classification must be a pure function of the record SET, never of the
+    input ARRAY order. Three order-dependence hazards existed before this
+    (found during the Sep 2026 steward hardening):
+      (a) recordId occurrence suffixes (gdr-room-5-2) were counted in input
+          order — swapping two same-seq records in the array produced
+          different recordIds and a different evidence hash;
+      (b) per-sender nonce monotonicity was evaluated in input order — a
+          reversed venue feed rejected records the forward feed accepted,
+          so validators paging the same room in different orders would
+          classify the same transcript differently (consensus hazard) and
+          the evidence hash was attacker-shapeable by array order;
+      (c) x%d recordIds for malformed/non-object records embedded the raw
+          input index.
+    The pre-sort removes all three: records are scanned in a deterministic
+    content order — (seq group, sequence, senderDid, nonce, signature, text,
+    type-tagged field blob, input position) — so any permutation of the
+    input array yields a byte-identical scan. The blob captures the RAW
+    TYPE of each classification-relevant field via cross-runtime type tags
+    ("z" null/undefined, "b" bool, "i" integral-safe number, "n" other
+    number, "s" string, "o" other), which are identical in Python and JS
+    for every value that can influence classification — integral floats
+    collapse to "i" because no classification branch distinguishes them
+    from ints (JSON 5.0 parses as float 5.0 in Python and 5 in JS; both
+    classify identically). The final input-position component only orders
+    entries identical in ALL classification-relevant fields; such entries
+    are interchangeable by definition (junk-only differences are dropped
+    from every stored output, so a rid swap between them is invisible in
+    the evidence hash). Every downstream step — recordId assignment,
+    duplicate detection, nonce monotonicity, canonical ordering — runs
+    over this one order.
+    MIRRORED EXACTLY by frontend/lib/gendid-lib.js rawSortKey (parity
+    corpus tests).
+    """
+    idx, rec = entry
+
+    def _t(v) -> str:
+        if v is None:
+            return "z"
+        if isinstance(v, bool):
+            return "b"
+        if isinstance(v, int):
+            return "i" if -_MAX_SEQ <= v <= _MAX_SEQ else "n"
+        if isinstance(v, float):
+            return (
+                "i"
+                if v.is_integer() and -_MAX_SEQ <= v <= _MAX_SEQ
+                else "n"
+            )
+        if isinstance(v, str):
+            return "s"
+        return "o"
+
+    def _tv(v) -> str:
+        t = _t(v)
+        if t == "s":
+            return _canonical_json(v)
+        if t == "i":
+            return str(int(v))
+        return ""
+
+    if not isinstance(rec, dict):
+        return (2, _t(rec), _tv(rec), idx)
+
+    seq = rec.get("sequence")
+    seq_ok = _is_canonical_seq(seq)
+    seq_int = int(seq) if (seq_ok and seq is not None) else 0
+    group = 0 if seq_ok else 1
+    sender = rec.get("senderDid")
+    nonce = rec.get("nonce")
+    sig = rec.get("signature")
+    text = rec.get("text")
+    blob = _canonical_json(
+        [
+            _t(seq),
+            _tv(seq),
+            _t(sender),
+            _tv(sender),
+            _t(nonce),
+            _tv(nonce),
+            _t(sig),
+            _tv(sig),
+            _t(text),
+            _tv(text),
+        ]
+    )
+    return (
+        group,
+        seq_int,
+        sender if isinstance(sender, str) else "",
+        nonce if isinstance(nonce, str) else "",
+        sig if isinstance(sig, str) else "",
+        text if isinstance(text, str) else "",
+        blob,
+        idx,
+    )
+
+
+def _classify_records(room: str, raw_records: list) -> dict:
+    """Deterministic classification (gendid/1.1). See CANONICALIZATION SPEC
+    above. Returns canonical records in canonical total order, authentic ids,
+    participants, counts, per-record rejections, and the transcript commitment.
+    """
     counts = {
         AUTHENTIC: 0,
         UNSIGNED: 0,
@@ -281,37 +490,96 @@ def _classify_records(room: str, raw_records: list) -> dict:
         DUPLICATE: 0,
     }
     rejections: dict = {}
+    records: list = []
+    authentic_entries: list = []  # (nonce_int, sequence, recordId, canonical)
+    seen_content: dict = {}  # (sender, nonce, sig, text) -> recordId (first)
+    last_nonce: dict = {}  # sender -> last accepted nonce int
 
-    def reject(rid: str, cls: str, why: str):
+    seq_ids: dict = {}  # (seq) -> occurrence count, for recordId disambiguation
+
+    def append_rejection(idx: int, rid: str, cls: str, why: str):
         counts[cls] += 1
-        rejections[rid] = why
-
-    for i, rec in enumerate(raw_records):
-        rid = "gdr-%s-%s" % (
-            room,
-            rec.get("sequence") if isinstance(rec, dict) else "idx%d" % i,
+        rejections[rid or "x%d" % idx] = why
+        records.append(
+            {
+                "recordId": rid or "x%d" % idx,
+                "room": room,
+                "sequence": None,
+                "senderDid": "",
+                "nonce": "",
+                "signature": "",
+                "text": "",
+                "signatureStatus": MALFORMED if cls == MALFORMED else cls,
+            }
         )
+
+    # CANONICAL SCAN ORDER: sort the raw records by content (see
+    # _raw_sort_key) so classification is a pure function of the record
+    # SET — the input array order can never influence recordIds, dedup,
+    # nonce monotonicity, rejections, or the evidence hash. Mirrored by
+    # frontend/lib/gendid-lib.js.
+    try:
+        entries = sorted(enumerate(raw_records), key=_raw_sort_key)
+    except Exception:
+        entries = list(enumerate(raw_records))
+
+    scan = 0
+    for idx, rec in entries:
+        scan += 1  # 1-based CANONICAL SCAN POSITION (array-order-invariant)
         if not isinstance(rec, dict):
-            counts[MALFORMED] += 1
-            rejections["gdr-idx%d" % i] = "not an object"
+            append_rejection(scan, "", MALFORMED, "not an object")
             continue
+
         seq = rec.get("sequence")
-        if not isinstance(seq, int) or seq < 0:
+        if not _is_canonical_seq(seq):
+            rid = "x%d" % scan
+            # keep whatever fields were present, but sequence is not canonical
+            records.append(
+                {
+                    "recordId": rid,
+                    "room": room,
+                    "sequence": None,
+                    "senderDid": rec.get("senderDid") if isinstance(rec.get("senderDid"), str) else "",
+                    "nonce": "",
+                    "signature": "",
+                    "text": rec.get("text") if isinstance(rec.get("text"), str) else "",
+                    "signatureStatus": MALFORMED,
+                }
+            )
             counts[MALFORMED] += 1
-            rejections[rid] = "bad sequence"
+            rejections[rid] = "bad or non-canonical sequence"
             continue
-        rid = "gdr-%s-%d" % (room, seq)
+        if isinstance(seq, float):
+            seq = int(seq)  # integral float -> int (JS parity)
+
+        occ = seq_ids.get(seq, 0)
+        seq_ids[seq] = occ + 1
+        rid = "gdr-%s-%d" % (room, seq) if occ == 0 else "gdr-%s-%d-%d" % (room, seq, occ + 1)
+
         sender = rec.get("senderDid")
         text = rec.get("text")
         if not isinstance(sender, str) or not isinstance(text, str):
+            records.append(
+                {
+                    "recordId": rid,
+                    "room": room,
+                    "sequence": seq,
+                    "senderDid": sender if isinstance(sender, str) else "",
+                    "nonce": "",
+                    "signature": "",
+                    "text": text if isinstance(text, str) else "",
+                    "signatureStatus": MALFORMED,
+                }
+            )
             counts[MALFORMED] += 1
             rejections[rid] = "missing senderDid/text"
             continue
         sig = rec.get("signature")
         nonce = rec.get("nonce")
-        if sig is None and nonce is None:
-            counts[UNSIGNED] += 1
-            out.append(
+        sig_s = sig if isinstance(sig, str) else ""
+        nonce_s = nonce if isinstance(nonce, str) else ""
+        if sig in (None, "") and nonce in (None, ""):
+            records.append(
                 {
                     "recordId": rid,
                     "room": room,
@@ -323,33 +591,78 @@ def _classify_records(room: str, raw_records: list) -> dict:
                     "signatureStatus": UNSIGNED,
                 }
             )
+            counts[UNSIGNED] += 1
             continue
-        if not isinstance(sig, str) or not isinstance(nonce, str):
+
+        def invalid(why: str):
             counts[INVALID_SIG] += 1
-            rejections[rid] = "sig/nonce not strings"
+            rejections[rid] = why
+            records.append(
+                {
+                    "recordId": rid,
+                    "room": room,
+                    "sequence": seq,
+                    "senderDid": sender,
+                    "nonce": nonce_s,
+                    "signature": sig_s,
+                    "text": text,
+                    "signatureStatus": INVALID_SIG,
+                }
+            )
+
+        if not isinstance(sig, str) or not isinstance(nonce, str):
+            invalid("sig/nonce not strings")
             continue
         if not DID_RE.fullmatch(sender):
-            counts[INVALID_SIG] += 1
-            rejections[rid] = "malformed did"
+            invalid("malformed did")
             continue
         if not NONCE_RE.fullmatch(nonce) or not SIG_RE.fullmatch(sig):
-            counts[INVALID_SIG] += 1
-            rejections[rid] = "malformed nonce/signature encoding"
+            invalid("malformed nonce/signature encoding")
             continue
         try:
             sig_bytes = base64.urlsafe_b64decode(sig + "==")
         except Exception:
-            counts[INVALID_SIG] += 1
-            rejections[rid] = "signature not base64url"
+            invalid("signature not base64url")
             continue
         if len(sig_bytes) != 64:
-            counts[INVALID_SIG] += 1
-            rejections[rid] = "signature not 64 bytes"
+            invalid("signature not 64 bytes")
+            continue
+        # canonical base64url: the stored string must be the unpadded
+        # re-encoding of its decoded bytes (rejects padded/alternate forms)
+        if base64.urlsafe_b64encode(sig_bytes).decode().rstrip("=") != sig:
+            invalid("non-canonical base64url signature")
+            continue
+        pubkey = did_to_pubkey(sender)
+        if pubkey is None:
+            invalid("did does not decode to ed25519-pub")
+            continue
+        # Strict Ed25519 application-level checks with per-category reasons
+        # (mirrored EXACTLY, same order, by the browser verifier — see
+        # frontend/lib/gendid-lib.js; parity enforced by the fixture corpus).
+        if pubkey in _SMALL_ORDER_ENC:
+            invalid("small-order public key")
+            continue
+        if _point_decompress(pubkey) is None:
+            invalid("non-canonical public key encoding")
+            continue
+        if sig_bytes[:32] in _SMALL_ORDER_ENC:
+            invalid("small-order signature R point")
+            continue
+        if _point_decompress(sig_bytes[:32]) is None:
+            invalid("non-canonical signature R point encoding")
+            continue
+        s_int = int.from_bytes(sig_bytes[32:], "little")
+        if s_int >= _L:
+            invalid("non-canonical scalar s >= L")
+            continue
+        if s_int == 0:
+            invalid("zero-scalar signature")
             continue
         key = (sender, nonce, sig, text)
-        if key in seen:
+        if key in seen_content:
+            # replay of an already-AUTHENTIC record's content
             counts[DUPLICATE] += 1
-            out.append(
+            records.append(
                 {
                     "recordId": rid,
                     "room": room,
@@ -362,29 +675,19 @@ def _classify_records(room: str, raw_records: list) -> dict:
                 }
             )
             continue
-        seen[key] = rid
-        pubkey = did_to_pubkey(sender)
-        if pubkey is None:
-            counts[INVALID_SIG] += 1
-            rejections[rid] = "did does not decode to ed25519-pub"
-            continue
         swept = tc_sweep(text)
         message = "%s|%s|%s" % (room, nonce, swept)
         if not ed25519_verify(pubkey, message.encode("utf-8"), sig_bytes):
-            counts[INVALID_SIG] += 1
-            rejections[rid] = "signature does not verify"
+            invalid("signature does not verify")
             continue
-        nonce_key = (sender,)
-        prev = last_nonce.get(nonce_key, -1)
+        prev = last_nonce.get(sender, -1)
         cur = int(nonce)
         if cur <= prev:
-            counts[INVALID_SIG] += 1
-            rejections[rid] = "nonce not increasing for key in room"
+            invalid("nonce not increasing for key in room")
             continue
-        last_nonce[nonce_key] = cur
+        last_nonce[sender] = cur
+        seen_content[key] = rid
         counts[AUTHENTIC] += 1
-        authentic_ids.add(rid)
-        participants.add(sender)
         canonical = {
             "recordId": rid,
             "room": room,
@@ -395,17 +698,53 @@ def _classify_records(room: str, raw_records: list) -> dict:
             "text": text,
             "signatureStatus": AUTHENTIC,
         }
-        out.append(canonical)
-        authentic_by_id[rid] = canonical
+        authentic_entries.append((cur, seq, rid, canonical))
 
-    out.sort(key=lambda r: r["sequence"] if isinstance(r["sequence"], int) else 0)
+    # ---- canonical total order ------------------------------------------
+    # 1) authentic first, by (nonce int, sequence, recordId)
+    authentic_entries.sort(key=lambda e: (e[0], e[1], e[2]))
+    # 2) remaining context records, by (sequence-null flag, sequence, recordId)
+    auth_rids = {e[2] for e in authentic_entries}
+    context = [r for r in records if r["recordId"] not in auth_rids]
+    context.sort(
+        key=lambda r: (
+            0 if isinstance(r["sequence"], int) else 1,
+            r["sequence"] if isinstance(r["sequence"], int) else 0,
+            r["recordId"],
+        )
+    )
+    ordered: list = []
+    auth_core: list = []
+    chain_hex = _sha256_hex(("gendid/1.1|%s" % room).encode("utf-8"))
+    authentic_ids: set = set()
+    participants: set = set()
+    authentic_by_id: dict = {}
+    order = 1
+    for nonce_int, seq, rid, canonical in authentic_entries:
+        chain_hex = _sha256_hex(
+            (chain_hex + "|" + _canonical_json(canonical)).encode("utf-8")
+        )
+        out = dict(canonical)
+        out["orderIndex"] = order
+        out["orderCommit"] = chain_hex
+        ordered.append(out)
+        authentic_ids.add(rid)
+        participants.add(canonical["senderDid"])
+        authentic_by_id[rid] = out
+        auth_core.append(out)
+        order += 1
+    for r in context:
+        r["orderIndex"] = order
+        ordered.append(r)
+        order += 1
     return {
-        "records": out,
+        "records": ordered,
         "authentic_ids": authentic_ids,
         "authentic_by_id": authentic_by_id,
         "participants": sorted(participants),
         "counts": counts,
         "rejections": rejections,
+        "transcriptCommitment": chain_hex,
     }
 
 
@@ -453,6 +792,32 @@ def _build_prompt(facts: dict) -> str:
     )
     lines.append("")
     lines.append(
+        "GROUNDED-EVIDENCE RULES (binding):"
+    )
+    lines.append(
+        "- Use ONLY the supplied transcript as evidence. Do not use outside "
+        "knowledge, assumptions, or anything not printed below."
+    )
+    lines.append(
+        "- Every claimed agreement term (task, price, quantity, deadline, "
+        "output, participant, cancellation, or any other condition) MUST map "
+        "to one or more AUTHENTIC_SIGNED records, cited by recordId."
+    )
+    lines.append(
+        "- If a term is absent from the authenticated records, it cannot be "
+        "assumed, inferred, or defaulted. Report the relevant question as FAIL "
+        "or UNCERTAIN instead."
+    )
+    lines.append(
+        "- An UNSIGNED, INVALID_SIGNATURE, DUPLICATE or MALFORMED record can "
+        "never ground an offer, an acceptance, an amendment, or any term."
+    )
+    lines.append(
+        "- The transcript order below is the canonical order (orderIndex); "
+        "acceptance must come from a different sender DID than the offer."
+    )
+    lines.append("")
+    lines.append(
         "Adjudication questions (answer each PASS, FAIL, or UNCERTAIN). PASS means "
         "the question is affirmatively established by authenticated evidence; FAIL "
         "means it is affirmatively not established; UNCERTAIN means the evidence is "
@@ -466,10 +831,12 @@ def _build_prompt(facts: dict) -> str:
     lines.append("Q2 offer_present: Does an authenticated record contain an offer with")
     lines.append("   concrete terms (a task/service, and at least one of: deadline,")
     lines.append("   output format, price/quantity, or other explicit condition)?")
+    lines.append("   Cite the offer record id in offerRecordId.")
     lines.append("Q3 acceptance_present: Does an authenticated record from a DIFFERENT")
     lines.append(
         "   sender DID than the offer contain clear acceptance of those terms (e.g. 'Accepted')?"
     )
+    lines.append("   Cite the acceptance record id in acceptanceRecordId.")
     lines.append(
         "Q4 acceptance_matches_offer: Does the acceptance actually respond to the offer's"
     )
@@ -480,14 +847,17 @@ def _build_prompt(facts: dict) -> str:
         "Q5 no_contradiction: Do later authenticated records from the parties fail to"
     )
     lines.append(
-        "   cancel, reject, or contradict the agreement (a later authenticated")
+        "   cancel, reject, or contradict the agreement (a later authenticated"
+    )
     lines.append(
         "   rejection/cancellation means FAIL)?"
     )
     lines.append(
-        "Q6 evidence_grounded: Do the record ids you cite all exist in the")
+        "Q6 evidence_grounded: Do the record ids you cite all exist in the"
+    )
     lines.append(
-        "   transcript and are they AUTHENTIC_SIGNED?")
+        "   transcript and are they AUTHENTIC_SIGNED?"
+    )
     lines.append("")
     lines.append(
         "Rules: never invent terms; never treat non-AUTHENTIC records as commitments; "
@@ -513,6 +883,11 @@ def _build_prompt(facts: dict) -> str:
     lines.append("Record ids are the ids shown on each transcript line below")
     lines.append("(gdr-<room>-<sequence>) — cite ids EXACTLY as printed there.")
     lines.append("")
+    lines.append(
+        "Transcript order commitment (sha256 hash chain over the authenticated "
+        "records in canonical order): %s" % facts.get("transcriptCommitment", "")
+    )
+    lines.append("")
     lines.append("TRANSCRIPT (untrusted evidence):")
     for rec in facts["records"]:
         tag = _tclk_tag(rec["text"])
@@ -521,8 +896,15 @@ def _build_prompt(facts: dict) -> str:
         if len(text) > MAX_TEXT_PROMPT:
             text = text[:MAX_TEXT_PROMPT] + "…[truncated]"
         lines.append(
-            "%s %s status=%s%s text=%s"
-            % (rec["recordId"], rec["senderDid"], rec["signatureStatus"], tag_note, text)
+            "%s %s status=%s orderIndex=%s%s text=%s"
+            % (
+                rec["recordId"],
+                rec["senderDid"],
+                rec["signatureStatus"],
+                rec.get("orderIndex", "-"),
+                tag_note,
+                text,
+            )
         )
     lines.append("")
     lines.append("END OF TRANSCRIPT.")
@@ -619,8 +1001,9 @@ class GenDidJudge(gl.Contract):
 
         evidence = _classify_records(room, raw_records)
         package = {
-            "protocolVersion": "gendid/1",
+            "protocolVersion": "gendid/1.1",
             "transcriptRoom": room,
+            "transcriptCommitment": evidence["transcriptCommitment"],
             "records": evidence["records"],
         }
         agreement_id = "GD-%s-%s" % (
@@ -641,9 +1024,10 @@ class GenDidJudge(gl.Contract):
 
         base_record = {
             "agreementId": agreement_id,
-            "protocolVersion": "gendid/1",
+            "protocolVersion": "gendid/1.1",
             "evidenceHash": _evidence_hash(package),
             "transcriptRoom": room,
+            "transcriptCommitment": evidence["transcriptCommitment"],
             "participants": participants,
             "status": STATUS_PENDING,
             "finalized": False,
@@ -660,6 +1044,10 @@ class GenDidJudge(gl.Contract):
         }
 
         # ---------------- deterministic gate ----------------
+        # (note: a transcript with exactly ONE authentic record is NOT gated
+        # out here — it proceeds to adjudication, which labels
+        # acceptance_present FAIL => NOT_AGREED. The gate only fires when
+        # there is nothing authenticated at all, or nobody to agree with.)
         gate_fail = ""
         if counts[AUTHENTIC] == 0:
             gate_fail = "no_authentic_records"
@@ -681,7 +1069,12 @@ class GenDidJudge(gl.Contract):
         authentic_by_id = evidence["authentic_by_id"]
 
         def leader_fn():
-            prompt = _build_prompt({"records": evidence["records"]})
+            prompt = _build_prompt(
+                {
+                    "records": evidence["records"],
+                    "transcriptCommitment": evidence["transcriptCommitment"],
+                }
+            )
             raw = gl.nondet.exec_prompt(prompt, response_format="json")
             parsed = None
             if isinstance(raw, str):
@@ -765,7 +1158,21 @@ class GenDidJudge(gl.Contract):
         for t in terms:
             cited.append(t["recordId"])
         ungrounded = [c for c in cited if c not in authentic_ids]
-        grounded_terms = [t for t in terms if t["recordId"] in authentic_ids]
+        # Grounded consensus over stored terms: an agreement term (price,
+        # quantity, deadline, participant, ...) is only established if the LLM
+        # CITED an authenticated record for it AND the term value actually
+        # appears in that record's stored text. Terms failing either test are
+        # INVENTED (or unfaithful to the transcript) and are dropped; if the
+        # grounded set is empty while agreement was claimed, the answer is
+        # treated as ungrounded (fail-safe).
+        grounded_terms = []
+        for t in terms:
+            rid_t = t["recordId"]
+            if rid_t not in authentic_by_id:
+                continue
+            rec_text = authentic_by_id[rid_t]["text"]
+            if t["value"] and t["value"] in rec_text:
+                grounded_terms.append(t)
         if ungrounded:
             labels["evidence_grounded"] = FAIL
         # Self-acceptance clamp: acceptance must come from a different DID.
@@ -774,6 +1181,25 @@ class GenDidJudge(gl.Contract):
         if acc_id and off_id and (acc_id in authentic_by_id) and (off_id in authentic_by_id):
             if authentic_by_id[acc_id]["senderDid"] == authentic_by_id[off_id]["senderDid"]:
                 labels["acceptance_present"] = FAIL
+        # Acceptance/offer records must themselves be authentic citations;
+        # citing an unsigned/invalid record for the core questions is a
+        # grounding failure (fail-safe, mirrors Q6).
+        if off_id and off_id not in authentic_ids:
+            labels["offer_present"] = FAIL
+        if acc_id and acc_id not in authentic_ids:
+            labels["acceptance_present"] = FAIL
+            labels["evidence_grounded"] = FAIL
+        # A PASS on offer/acceptance MUST rest on an authentic citation:
+        # the LLM cannot assert PASS while citing nothing (or a non-authentic
+        # record) — agreement claims are grounded by construction.
+        if labels["offer_present"] == PASS and not off_id:
+            labels["offer_present"] = FAIL
+        if labels["acceptance_present"] == PASS and not acc_id:
+            labels["acceptance_present"] = FAIL
+        # AGREED requires at least one grounded term with an authentic
+        # citation (the deal's content must be traceable to stored evidence).
+        if labels["offer_present"] == PASS and not grounded_terms:
+            labels["evidence_grounded"] = FAIL
 
         # ---------------- derivation matrix ----------------
         status, summary = _derive_status(labels, participants, counts)

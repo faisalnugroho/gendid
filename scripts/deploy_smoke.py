@@ -310,8 +310,9 @@ def compute_agreement_id(room, records):
 
     evidence = mod._classify_records(room, records)
     package = {
-        "protocolVersion": "gendid/1",
+        "protocolVersion": "gendid/1.1",
         "transcriptRoom": room,
+        "transcriptCommitment": evidence["transcriptCommitment"],
         "records": evidence["records"],
     }
     canon = mod._canonical_json(package)
@@ -386,11 +387,63 @@ def main():
     s4 = adjudicate(client, addr, "S4", room4, recs4, "INSUFFICIENT_EVIDENCE")
     log["s4_negative"] = s4
 
+    # ---------------- S4b STEWARD ATTACK LIVE ----------------
+    # The exact steward finding, live on chain: identity-point public key +
+    # zero-scalar signature + arbitrary "acceptance" text. The attacker
+    # record must classify INVALID_SIGNATURE and the transcript must never
+    # be AGREED (fail-safe INSUFFICIENT_EVIDENCE: one authentic record,
+    # nobody to agree with).
+    print("--- S4b STEWARD ATTACK LIVE: identity key + zero-scalar sig ---",
+          flush=True)
+    a4b, b4b = new_agent(), new_agent()
+    room4b = "gendid-live-s4b"
+    real_offer = make_record(a4b, room4b, 1, OFFER_TEXT, "1757318071001")
+    P = 2**255 - 19
+
+    def _b58(raw: bytes) -> str:
+        n = int.from_bytes(raw, "big")
+        out = ""
+        while n:
+            n, rem = divmod(n, 58)
+            out = B58[rem] + out
+        return out
+
+    def _did_for_pub(pub32: bytes) -> str:
+        return "did:key:z" + _b58(b"\xed\x01" + pub32)
+
+    def _b64url(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    identity_enc = bytes.fromhex(
+        "0100000000000000000000000000000000000000000000000000000000000000")
+    attack_record = {
+        "recordId": f"gdr-{room4b}-2",
+        "room": room4b,
+        "sequence": 2,
+        "timestamp": "2026-09-08T07:14:02.512Z",
+        "senderDid": _did_for_pub(identity_enc),  # identity-point key
+        "nonce": "1757318071002",
+        # R = identity point, S = zero scalar
+        "signature": _b64url(identity_enc + bytes(32)),
+        "text": ACCEPT_TEXT,  # arbitrary message "accepted"
+        "signatureStatus": "AUTHENTIC_SIGNED",  # liar's claim; classifier decides
+    }
+    recs4b = [real_offer, attack_record]
+    s4b = adjudicate(client, addr, "S4b", room4b, recs4b,
+                     "INSUFFICIENT_EVIDENCE")
+    # hard assertions on the classification itself, not just the status
+    assert s4b["record"]["recordCounts"]["INVALID_SIGNATURE"] == 1, \
+        "attack record was not INVALID_SIGNATURE"
+    assert s4b["record"]["recordCounts"]["AUTHENTIC_SIGNED"] == 1
+    print("  [S4b] steward attack record: INVALID_SIGNATURE (live), "
+          "transcript NOT AGREED", flush=True)
+    log["s4b_steward_attack"] = s4b
+
     # ---------------- S5 views readback ----------------
     print("--- S5 VIEWS: readback ---", flush=True)
     got1 = read_json(client, addr, "get_agreement", [s1["agreementId"]])
     cnt = int(read_json(client, addr, "get_agreement_count", []))
-    views_ok = got1.get("status") == "AGREED" and cnt >= 4
+    views_ok = got1.get("status") == "AGREED" and cnt >= 5
     print(f"VIEWS_OK: {views_ok} (count={cnt}, s1 status={got1.get('status')})", flush=True)
     log["s5_views"] = {"ok": views_ok, "count": cnt,
                        "s1_readback_status": got1.get("status")}
@@ -401,8 +454,10 @@ def main():
         "s2_dispute_not_agreed": s2["match"],
         "s3_ambiguous_family": s3["match"],
         "s4_negative_not_agreed": s4["match"],
+        "s4b_steward_attack_rejected": s4b["match"],
         "views_ok": views_ok,
-        "all_ok": all([s1["match"], s2["match"], s3["match"], s4["match"], views_ok]),
+        "all_ok": all([s1["match"], s2["match"], s3["match"], s4["match"],
+                       s4b["match"], views_ok]),
     }
     LOG.parent.mkdir(exist_ok=True)
     LOG.write_text(json.dumps(log, indent=2, default=str))

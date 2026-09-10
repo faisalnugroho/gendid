@@ -301,18 +301,17 @@
         loadRecords(pasted, null, "pasted transcript");
       }
       var clean = state.rawRecords.filter(function (r) { return !r.malformed; });
-      var ev = GD.classifyTranscript(state.room, clean);
-      var pkg = { protocolVersion: "gendid/1", transcriptRoom: state.room, records: ev.records };
-      GD.sha256Hex(GD.canonicalJson(pkg)).then(function (hash) {
-        state.verified = {
-          records: ev.records, counts: ev.counts, rejections: ev.rejections,
-          authenticIds: ev.authenticIds, participants: ev.participants,
-          package: pkg, evidenceHash: hash,
-          agreementId: "GD-" + state.room.slice(0, 24) + "-" + hash.slice(0, 16),
-        };
+      GD.buildEvidencePackage(state.room, clean).then(function (ev) {
+        state.verified = ev;
         renderVerified();
         renderRecords(); // re-render with statuses
         $("sec-analyze").hidden = false;
+        // reveal the adjudication panel so the user can actually click
+        // Judge — previously the ONLY code unhiding #sec-adjudicate was
+        // judgeAgreement() itself, whose trigger button lives INSIDE the
+        // hidden section (unclickable). Found during the Sep 2026
+        // steward-hardening live E2E.
+        $("sec-adjudicate").hidden = false;
         renderCandidate();
         toast("Verified: " + ev.counts.AUTHENTIC_SIGNED + " authentic · " + ev.counts.UNSIGNED + " unsigned · " + (ev.counts.INVALID_SIGNATURE + ev.counts.MALFORMED) + " rejected.");
       });
@@ -781,7 +780,7 @@
 
     // receipt JSON snapshot
     state.receiptJson = JSON.stringify({
-      protocolVersion: "gendid/1",
+      protocolVersion: "gendid/1.1",
       agreementId: v.agreementId,
       status: res.status,
       evidenceHash: v.evidenceHash,

@@ -1,6 +1,9 @@
 # GenDid — Live Deployment Record (VERIFIED ONLY)
 
-Date: 2026-09-08 (UTC)
+Date: 2026-09-10 (UTC) — gendid/1.1 steward-hardened build
+(Supersedes the 2026-09-08 gendid/1 deployment; the original record is
+preserved below for history. The old `0xb865…` contract predates the
+steward hardening and is NOT the production contract anymore.)
 Everything below was observed on-chain. No field is fabricated.
 
 ## Network
@@ -9,35 +12,76 @@ Everything below was observed on-chain. No field is fabricated.
 - RPC: `https://studio.genlayer.com/api` (as shipped in genlayer-py `studionet`)
 - Explorer: `https://explorer-studio.genlayer.com`
 - Deployer account: `0x5E77b8D3655918454134a2d5BAd9dd76B741b4cB`
-  (funded 10 GEN via the official Studio faucet RPC `sim_fundAccount` — the
+  (funded via the official Studio faucet RPC `sim_fundAccount` — the
   same mechanism as the Studio account-selector 💧 button; keyfile
   `scripts/smoke_deployer.json`, gitignored, never printed/committed)
 
-## Contract
+## Contract (gendid/1.1 — CURRENT PRODUCTION)
 
-- **Address: `0xb86505e421cfc256df41900c0c1203cBD26415bf`**
-- Deploy transaction: `0x8dd23d9603cd043b5748ede94339084223e1746d481214ac62cae69f33666494`
+- **Address: `0xF3A0Fc40Cc75FbCb9Ae24E1250D67cEe5A13158a`**
+- Deploy transaction: `0xaaa4cc91402839dd930e0fedf9a37a5f11a8e1d499d1440db32b8b836255a71a`
   (FINALIZED, MAJORITY_AGREE, leader exec SUCCESS)
-- Explorer: https://explorer-studio.genlayer.com/address/0xb86505e421cfc256df41900c0c1203cBD26415bf
-- Two earlier same-code deploys (0xF163…E00, 0x27cF…04A) were superseded by the
-  final one after live integration fixes (see "Contract changes" below).
+- Explorer: https://explorer-studio.genlayer.com/address/0xF3A0Fc40Cc75FbCb9Ae24E1250D67cEe5A13158a
+- Why redeployed: the steward hardening changed contract code (strict
+  Ed25519 validation layer, canonical scan order, transcript order
+  commitment, grounding gates) — the Sep-08 contract cannot be patched
+  in place; an upgrade means a new address.
+- The exact steward attack was run LIVE against this contract (S4b
+  below): identity-point key + zero-scalar signature + arbitrary
+  acceptance text → classified INVALID_SIGNATURE on-chain, transcript
+  INSUFFICIENT_EVIDENCE, never AGREED.
 
-## Live test transactions (all on the final contract above)
+## Live test transactions (gendid/1.1 contract, all FINALIZED)
 
 | # | Scenario | Tx | Vote | Leader exec | On-chain status |
 |---|---|---|---|---|---|
-| S1 | Clear agreement (demo A fixture) | `0xec7f73f84e205f4c5bdf0f29e42da81723ff63d8b4c7124eef2627cb381d767f` | MAJORITY_AGREE | SUCCESS | **AGREED** |
-| S2 | Contradiction/dispute (demo B fixture) | `0xb8518b8758622d942f81e9ad595cd9803afe250a08bbcaf49a1800b771c140e4` | MAJORITY_AGREE | SUCCESS | **NOT_AGREED** |
-| S3 | Ambiguous (demo C fixture) | `0xa6128b28a2c26858e005feb5e2513dd7fb7122e9103906d7f17b324069f17367` | MAJORITY_AGREE | SUCCESS | **NOT_AGREED** |
-| S4 | Negative: tampered signature | `0xc7d1a129acd10cc50231c4dba77ca9910e61eb360f31965856c1a4baa6d2bf2d` | MAJORITY_AGREE | SUCCESS | **INSUFFICIENT_EVIDENCE** |
+| S1 | Clear agreement (demo A fixture) | `0xba0120dab6e629937f0f538b01d1504b685f266a37e31f9c9b811a9edf55efe1` | MAJORITY_AGREE | SUCCESS | **AGREED** |
+| S2 | Contradiction/dispute | `0x154789ebd0d8d9732fbdb6c982eb2a45e1d8ac8dcbbd16459b1789d6ccb88976` | MAJORITY_AGREE | SUCCESS | **INSUFFICIENT_EVIDENCE** (see note) |
+| S2b | Contradiction/dispute (re-run, fresh room) | `0xae16be4e05089d29045234574df7dddf9500aa377d0e82ea17a42779b0ab4011` | MAJORITY_AGREE | SUCCESS | **NOT_AGREED** |
+| S3 | Vague/ambiguous (demo C fixture) | `0x29711038e9acc519aea77da5c8791ea89a6b3b880fd64571ed1b656db62e8bf3` | MAJORITY_AGREE | SUCCESS | **NOT_AGREED** (safe family) |
+| S3b | Vague/ambiguous (re-run, fresh room) | `0xe004a06e3e29df75782b52f6d3aee7b155e465ba50bee15dfa13bfdc647f7932` | MAJORITY_AGREE | SUCCESS | **NOT_AGREED** |
+| S4 | Negative: tampered signature | `0x9ec99d315879fe0aea1dab18c5641819ff23ac23c9892b4ffb8d4266ff12303c` | MAJORITY_AGREE | SUCCESS | **INSUFFICIENT_EVIDENCE** |
+| S4b | **STEWARD ATTACK (identity key + zero-scalar sig)** | `0x3c9f79a8a63c77f85192e4e77ea38b471e6ff2ed88cdcf2ebb35812d8c80ef07` | MAJORITY_AGREE | SUCCESS | **INSUFFICIENT_EVIDENCE** — attack record INVALID_SIGNATURE, never AGREED |
 
-On-chain agreement records (read back via `get_agreement`):
+**Note on S2 (the grounding gate working live):** on the first S2 run the
+live validator LLM returned otherwise-PASS labels but cited record ids that
+do not exist in the authenticated transcript. The contract's deterministic
+grounding gate (`evidence_grounded`) caught the ungrounded citations,
+marked them FAIL, and derived the fail-safe INSUFFICIENT_EVIDENCE instead
+of trusting the leader's PASS labels — exactly the defense the Steward
+required ("leader output alone is never trusted"). The S2b re-run with a
+fresh room shows the grounded path: correct citations → no_contradiction
+FAIL → NOT_AGREED. Both outcomes are non-AGREED; the gate makes invented
+evidence unable to produce AGREED.
 
-- `GD-gendid-live-s1-aba81600813fa2b2` — AGREED (2 participants, 4 grounded terms)
-- `GD-gendid-live-s2-1cde5c8c99968624` — NOT_AGREED (no_contradiction=FAIL)
-- `GD-gendid-live-s3-54b72220b93023c0` — NOT_AGREED (offer_present=FAIL)
-- `GD-gendid-live-s4-fe4df72b35485afd` — INSUFFICIENT_EVIDENCE (deterministic
-  gate: tampered record rejected → single authentic participant)
+On-chain agreement records (read back via `get_agreement`): see
+`docs/deployment_log.json` (checked into the repo) for the full records
+including recordCounts, questionLabels, and the transcriptCommitment for
+every scenario above.
+
+## Browser E2E (gendid/1.1 contract, full live path, 2026-09-10)
+
+- Driven with Playwright against the real frontend (`scripts/e2e_browser_live.py`,
+  local static serve): Demo A → browser strict verification (3 AUTHENTIC_SIGNED)
+  → LIVE Judge submit → on-chain status.
+- Live tx `0xd63b11e57ba16495505638e4ad52a08704af1611c740a3fbb331b2ef3a6615b0`
+  (in-browser burner writer) — on-chain status **AGREED**.
+- **Canonicalization parity, live**: browser-computed
+  `evidenceHash e9dd0be4691b2077d4f59a2055509914ef4278816035cf9f97fdae240498daef`
+  == the on-chain record's evidenceHash (read back via `get_agreement` for
+  `GD-gendid-demo-01-e9dd0be4691b2077`), byte-identical — the JS and Python
+  implementations produce the same canonical bytes on a real consensus run.
+- UI fix found during this E2E: the **Judge Agreement** button lived inside a
+  section that only the judge handler itself could reveal (unclickable by a
+  real user — a pre-existing bug since the first release). Verification now
+  reveals the adjudication panel; fixed in `frontend/gendid-app.js`.
+
+---
+
+# History — gendid/1 deployment (2026-09-08, SUPERSEDED)
+
+Everything below refers to the superseded `0xb865…` contract. It is kept
+as the original verified record of that deployment.
 
 ### S3 result vs the demo annotation — honest discrepancy report
 
