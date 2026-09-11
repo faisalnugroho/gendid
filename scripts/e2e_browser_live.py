@@ -83,6 +83,8 @@ def main():
             ev_aid = page.inner_text("#e-aid").strip()
             print("[E2E] browser evidenceHash:", ev_hash)
             print("[E2E] browser agreementId:", ev_aid)
+            assert ev_aid.startswith("GD-gendid-demo-01b-"), \
+                f"demo A is not the deterministic room: {ev_aid!r}"
             # persist for the post-run on-chain readback
             Path("/tmp/e2e_browser_out.json").write_text(json.dumps({
                 "browser_evidenceHash": ev_hash, "browser_agreementId": ev_aid,

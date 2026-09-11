@@ -549,5 +549,133 @@ print(json.dumps(sigs))
   }
 }
 
+// ----------------------------------------------------------------
+// T9 PUBLIC DEMO DETERMINISM (gendid/1.2 room-seal regression)
+// The public Demo A must build a byte-identical transcript on every page
+// load: fixed nonces -> deterministic Ed25519 signatures -> identical
+// canonical records / manifest / transcriptCommitment / evidenceHash /
+// agreementId. This is what makes the on-chain demo idempotent: the first
+// authoritative run seals the room, and every reload resubmits the SAME
+// manifest, so the contract returns the finalized AGREED record instead of
+// conflicting_snapshot (the failure mode of the old Math.random() nonce
+// jitter, observed live 2026-09-11).
+// The construction below mirrors buildDemo() in frontend/gendid-app.js
+// exactly (that function lives inside the app IIFE and is not exported;
+// this test replicates it from the same data + same GD primitives, and
+// asserts the invariants the app must keep).
+// ----------------------------------------------------------------
+console.log("T9  public demo determinism (room seal / idempotency regression)");
+{
+  // load demos.js the same way the browser does (sets window.GENDID_DEMOS)
+  const DEMOS = new URL("../../frontend/demos.js", import.meta.url).pathname;
+  require(DEMOS);
+  const DEMOS_DATA = globalThis.window.GENDID_DEMOS;
+  const demo = DEMOS_DATA.clear;
+
+  check("demo A room is the fresh deterministic room (not the sealed gendid-demo-01)",
+    demo.room === "gendid-demo-01b", demo.room);
+  check("demo A seeds are the public deterministic demo seeds",
+    demo.seedA === "11".repeat(32) && demo.seedB === "22".repeat(32));
+
+  // exact mirror of buildDemo(): identities from seeds, FIXED nonces
+  function buildDemoOnce() {
+    const ids = { a: GD.identityFromSeed(demo.seedA), b: GD.identityFromSeed(demo.seedB) };
+    if (demo.seedN) ids.n = GD.identityFromSeed(demo.seedN);
+    const base = 1757318040000;
+    return demo.script.map((line, i) => {
+      const id = ids[line.who];
+      const nonce = line.unsigned ? "" : String(base + (i + 1) * 7000);
+      const ts = new Date(base + (i + 1) * 7000).toISOString();
+      const sig = (line.unsigned || !id.kp) ? "" : GD.signSay(id, demo.room, nonce, line.text);
+      return {
+        recordId: "gdr-" + demo.room + "-" + (i + 1),
+        room: demo.room,
+        sequence: i + 1,
+        timestamp: ts,
+        senderDid: id ? id.did : "listener",
+        nonce,
+        signature: sig,
+        text: line.text,
+      };
+    });
+  }
+
+  // nonce determinism: the exact fixed values, no jitter anywhere
+  const base = 1757318040000;
+  const r1 = buildDemoOnce();
+  check("demo nonces are the fixed strictly-increasing values (no Math.random)",
+    r1.map((r) => r.nonce).join(",") ===
+      [1, 2, 3].map((i) => String(base + i * 7000)).join(","),
+    r1.map((r) => r.nonce).join(","));
+
+  // byte-identical repeated construction (records + everything derived)
+  const r2 = buildDemoOnce();
+  const build2 = JSON.stringify(r1) === JSON.stringify(r2);
+  check("buildDemo twice -> byte-identical records (canonical JSON equal)", build2);
+
+  // records remain AUTHENTIC_SIGNED in the browser verifier
+  const cls1 = await GD.classifyTranscript(demo.room, r1);
+  const cls2 = await GD.classifyTranscript(demo.room, r2);
+  check("all demo A records are AUTHENTIC_SIGNED",
+    cls1.counts.AUTHENTIC_SIGNED === 3 &&
+    cls1.records.every((r) => r.signatureStatus === "AUTHENTIC_SIGNED"),
+    JSON.stringify(cls1.counts));
+
+  // evidence package determinism: commitment + evidenceHash + agreementId
+  const pkg1 = await GD.buildEvidencePackage(demo.room, r1);
+  const pkg2 = await GD.buildEvidencePackage(demo.room, r2);
+  check("transcriptCommitment identical across builds",
+    pkg1.transcriptCommitment === pkg2.transcriptCommitment,
+    `${pkg1.transcriptCommitment} vs ${pkg2.transcriptCommitment}`);
+  check("evidenceHash identical across builds",
+    pkg1.evidenceHash === pkg2.evidenceHash,
+    `${pkg1.evidenceHash} vs ${pkg2.evidenceHash}`);
+  check("agreementId identical across builds",
+    pkg1.agreementId === pkg2.agreementId,
+    `${pkg1.agreementId} vs ${pkg2.agreementId}`);
+
+  // manifest determinism (what every participant signs)
+  const m1 = await GD.buildManifest(demo.room, cls1);
+  const m2 = await GD.buildManifest(demo.room, cls2);
+  check("manifest byte-identical across builds",
+    JSON.stringify(m1) === JSON.stringify(m2));
+  check("manifestStr identical across builds",
+    GD.manifestStr(m1) === GD.manifestStr(m2));
+
+  // AUTHENTIC_SIGNED + identical manifest/commitment per the CONTRACT's own
+  // Python implementation (the authority gate runs there, not in the browser)
+  const pyCheck = pyRunner(`${pyPrelude}
+cls = G._classify_records(room=_payload["room"], raw_records=_payload["records"])
+m = G._build_manifest(_payload["room"], cls)
+print(json.dumps({
+  "authentic": cls["counts"]["AUTHENTIC_SIGNED"],
+  "commitment": cls["transcriptCommitment"],
+  "manifest_str": G._manifest_str(m),
+  "participants": sorted(cls["participants"]),
+}))
+`, { room: demo.room, records: r1 });
+  check("contract Python classifies demo A as 3 AUTHENTIC_SIGNED",
+    pyCheck.authentic === 3, JSON.stringify(pyCheck));
+  check("JS transcriptCommitment == contract Python transcriptCommitment (demo room)",
+    pkg1.transcriptCommitment === pyCheck.commitment,
+    `${pkg1.transcriptCommitment} vs ${pyCheck.commitment}`);
+  check("JS manifestStr == contract Python manifestStr (demo room)",
+    GD.manifestStr(m1) === pyCheck.manifest_str,
+    `${GD.manifestStr(m1)} vs ${pyCheck.manifest_str}`);
+
+  // determinism vs a SECOND Python run of the same input
+  const pyCheck2 = pyRunner(`${pyPrelude}
+cls = G._classify_records(room=_payload["room"], raw_records=_payload["records"])
+m = G._build_manifest(_payload["room"], cls)
+print(json.dumps({"commitment": cls["transcriptCommitment"], "manifest_str": G._manifest_str(m)}))
+`, { room: demo.room, records: r2 });
+  check("contract Python manifest deterministic across runs",
+    pyCheck2.commitment === pyCheck.commitment &&
+    pyCheck2.manifest_str === pyCheck.manifest_str);
+
+  // persist the canonical demo values for the deployment record
+  console.log(`  demo canonical values: room=${demo.room} commitment=${pkg1.transcriptCommitment.slice(0, 16)}… evidenceHash=${pkg1.evidenceHash.slice(0, 16)}… agreementId=${pkg1.agreementId}`);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

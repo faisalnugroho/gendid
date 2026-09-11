@@ -13,7 +13,11 @@ window.GENDID_DEMOS = {
     blurb: "Concrete offer, matching acceptance by a distinct DID, no contradiction.",
     seedA: "11".repeat(32),
     seedB: "22".repeat(32),
-    room: "gendid-demo-01",
+    // gendid/1.2 deterministic public demo room. The previous room
+    // (gendid-demo-01) was sealed on-chain by a run that used randomized
+    // nonce jitter; a sealed room can never accept a different manifest,
+    // so the canonical deterministic demo lives in this fresh room.
+    room: "gendid-demo-01b",
     script: [
       { who: "a", text: "I need data normalization for the sales CSV. Output must be JSON. Maximum latency 30 seconds. Price is 5 credits." },
       { who: "b", text: "Accepted. I will normalize the sales CSV to JSON within 30 seconds for 5 credits." },

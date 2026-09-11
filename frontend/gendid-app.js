@@ -163,10 +163,20 @@
     if (!d) throw new Error("Unknown demo: " + demoKey);
     var ids = { a: demoIdentity(d.seedA), b: demoIdentity(d.seedB) };
     if (d.seedN) ids.n = demoIdentity(d.seedN);
+    // gendid/1.2: FULLY DETERMINISTIC demo records. Every page load builds
+    // the byte-identical transcript (same nonces -> same Ed25519 signatures
+    // -> same canonical records -> same manifest/transcriptCommitment/
+    // evidenceHash -> same agreementId). This makes the public demo
+    // idempotent on-chain: the first authoritative run seals the room, and
+    // every later page load resubmits the IDENTICAL manifest, so the
+    // contract's early-return path (existing finalized record) returns the
+    // same AGREED result — never a conflicting_snapshot. The historical
+    // Math.random() nonce jitter made each load a different snapshot and
+    // collided with the room seal (found live 2026-09-11).
     var base = 1757318040000;
     var recs = d.script.map(function (line, i) {
       var id = ids[line.who];
-      var nonce = String(base + (i + 1) * 7000 + Math.floor(Math.random() * 500)); // strictly increasing
+      var nonce = line.unsigned ? "" : String(base + (i + 1) * 7000); // strictly increasing, FIXED
       var ts = new Date(base + (i + 1) * 7000).toISOString();
       var sig = (line.unsigned || !id.kp) ? "" : GD.signSay(id, d.room, nonce, line.text);
       return {
@@ -175,7 +185,7 @@
         sequence: i + 1,
         timestamp: ts,
         senderDid: id ? id.did : "listener",
-        nonce: line.unsigned ? "" : nonce,
+        nonce: nonce,
         signature: sig,
         text: line.text,
       };

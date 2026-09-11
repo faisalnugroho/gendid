@@ -46,7 +46,7 @@ jobs:
         working-directory: tests/direct
         run: python -m pytest test_adversarial_ed25519.py test_authority.py test_gendid_judge.py test_order_binding.py -v
 
-      - name: "Browser/contract parity + dual-runner corpus + manifest parity (61 checks)"
+      - name: "Browser/contract parity + dual-runner corpus + manifest parity + demo determinism (75 checks)"
         run: node tests/js/test-parity.mjs
 
       - name: "Steward attack reproducer (identity key + zero scalar + torsion + manifest-authority attacks)"
