@@ -1,9 +1,10 @@
 # GenDid — Live Deployment Record (VERIFIED ONLY)
 
-Date: 2026-09-10 (UTC) — gendid/1.1 steward-hardened build
-(Supersedes the 2026-09-08 gendid/1 deployment; the original record is
-preserved below for history. The old `0xb865…` contract predates the
-steward hardening and is NOT the production contract anymore.)
+Date: 2026-09-11 (UTC) — **gendid/1.2 snapshot-authority build**
+(Supersedes the 2026-09-10 gendid/1.1 and 2026-09-08 gendid/1 deployments;
+those records are preserved below for history. The `0xF3A0…` and `0xb865…`
+contracts predate the snapshot-authority hardening and are NOT the
+production contract anymore.)
 Everything below was observed on-chain. No field is fabricated.
 
 ## Network
@@ -16,65 +17,85 @@ Everything below was observed on-chain. No field is fabricated.
   same mechanism as the Studio account-selector 💧 button; keyfile
   `scripts/smoke_deployer.json`, gitignored, never printed/committed)
 
-## Contract (gendid/1.1 — CURRENT PRODUCTION)
+## Contract (gendid/1.2 — CURRENT PRODUCTION)
 
-- **Address: `0xF3A0Fc40Cc75FbCb9Ae24E1250D67cEe5A13158a`**
-- Deploy transaction: `0xaaa4cc91402839dd930e0fedf9a37a5f11a8e1d499d1440db32b8b836255a71a`
+- **Address: `0xfb861614e3f274bc3e3253cd0857c70fc08dD4B1`**
+- Deploy transaction: `0xcf79982851cc510fe09e006f7d9f721cd23704c1ee93fe0d9b9f8f6ee96cc816`
   (FINALIZED, MAJORITY_AGREE, leader exec SUCCESS)
-- Explorer: https://explorer-studio.genlayer.com/address/0xF3A0Fc40Cc75FbCb9Ae24E1250D67cEe5A13158a
-- Why redeployed: the steward hardening changed contract code (strict
-  Ed25519 validation layer, canonical scan order, transcript order
-  commitment, grounding gates) — the Sep-08 contract cannot be patched
-  in place; an upgrade means a new address.
-- The exact steward attack was run LIVE against this contract (S4b
-  below): identity-point key + zero-scalar signature + arbitrary
-  acceptance text → classified INVALID_SIGNATURE on-chain, transcript
-  INSUFFICIENT_EVIDENCE, never AGREED.
+- Explorer: https://explorer-studio.genlayer.com/address/0xfb861614e3f274bc3e3253cd0857c70fc08dD4B1
+- **Deployed source byte-identity**: sha256 of the deploy tx's
+  `data.contract_code` == sha256 of `contracts/gendid_judge.py` at the
+  release commit — 62,511 bytes,
+  `6497e5f5b7f78842f38a7263a8b8dc033999a0aecfa31bced3835c6ac15bc8ac`.
+- Why redeployed: the gendid/1.2 snapshot-authority change (jointly-signed
+  transcript manifest, room seals, NON_AUTHORITATIVE state, new
+  `submit_evidence` signature) changes verified contract code and storage —
+  the 1.1 contract cannot be patched in place; an upgrade means a new address.
+- The exact Steward attacks were run LIVE against this contract: the
+  Ed25519 identity-point attack (S4b) and the gendid/1.2 authority attacks
+  (S6 caller-selected subset, S7 conflicting snapshot, S8 unmanifested) —
+  all rejected on-chain, none AGREED.
 
-## Live test transactions (gendid/1.1 contract, all FINALIZED)
+## Live test transactions (gendid/1.2 contract, all FINALIZED)
 
 | # | Scenario | Tx | Vote | Leader exec | On-chain status |
 |---|---|---|---|---|---|
-| S1 | Clear agreement (demo A fixture) | `0xba0120dab6e629937f0f538b01d1504b685f266a37e31f9c9b811a9edf55efe1` | MAJORITY_AGREE | SUCCESS | **AGREED** |
-| S2 | Contradiction/dispute | `0x154789ebd0d8d9732fbdb6c982eb2a45e1d8ac8dcbbd16459b1789d6ccb88976` | MAJORITY_AGREE | SUCCESS | **INSUFFICIENT_EVIDENCE** (see note) |
-| S2b | Contradiction/dispute (re-run, fresh room) | `0xae16be4e05089d29045234574df7dddf9500aa377d0e82ea17a42779b0ab4011` | MAJORITY_AGREE | SUCCESS | **NOT_AGREED** |
-| S3 | Vague/ambiguous (demo C fixture) | `0x29711038e9acc519aea77da5c8791ea89a6b3b880fd64571ed1b656db62e8bf3` | MAJORITY_AGREE | SUCCESS | **NOT_AGREED** (safe family) |
-| S3b | Vague/ambiguous (re-run, fresh room) | `0xe004a06e3e29df75782b52f6d3aee7b155e465ba50bee15dfa13bfdc647f7932` | MAJORITY_AGREE | SUCCESS | **NOT_AGREED** |
-| S4 | Negative: tampered signature | `0x9ec99d315879fe0aea1dab18c5641819ff23ac23c9892b4ffb8d4266ff12303c` | MAJORITY_AGREE | SUCCESS | **INSUFFICIENT_EVIDENCE** |
-| S4b | **STEWARD ATTACK (identity key + zero-scalar sig)** | `0x3c9f79a8a63c77f85192e4e77ea38b471e6ff2ed88cdcf2ebb35812d8c80ef07` | MAJORITY_AGREE | SUCCESS | **INSUFFICIENT_EVIDENCE** — attack record INVALID_SIGNATURE, never AGREED |
+| S1 | Clear agreement (full manifest authority) | `0x0ed03edd22e220c0f5e9396190a667871c1e79ad4052018e6ea47a101893a01e` | MAJORITY_AGREE | SUCCESS | **AGREED** |
+| S2 | Contradiction/dispute | `0xe62f171ccd70d2890c964bc3b0e87fdbfa26a87ce4162c8b2cb303059e27e858` | MAJORITY_AGREE | SUCCESS | **INSUFFICIENT_EVIDENCE** (see note) |
+| S2b | Contradiction/dispute (re-run, fresh room) | `0x6c7b11b39571ae7af5bc5ab54aa646038ec2ac321f998e7a23a20dc94da66e91` | MAJORITY_AGREE | SUCCESS | **NOT_AGREED** (grounded: no_contradiction FAIL) |
+| S3 | Vague/ambiguous (no concrete terms) | `0x8ee48c8bf6831d758beae5063cc622b982bad7cbd0526f28daacd8a66822fd35` | MAJORITY_AGREE | SUCCESS | **NOT_AGREED** (offer lacked concrete terms) |
+| S4 | Negative: tampered signature | `0x13141447b738b49235de6f8b9a54d220a2e3820e4c4d5abdda188dcb6e07a96f` | MAJORITY_AGREE | SUCCESS | **INSUFFICIENT_EVIDENCE** (single participant after rejection) |
+| S4b | **STEWARD ATTACK (identity key + zero-scalar sig)** | `0xc335f8894409c5ec017eb31a7c462ed55fe7db12fb4fbae75541087c82bae440` | MAJORITY_AGREE | SUCCESS | **INSUFFICIENT_EVIDENCE** — attack record INVALID_SIGNATURE, never AGREED |
+| S6 | **AUTHORITY: caller-selected subset + full-manifest sigs** | `0xb7d4a72296ff2b9c2540222667a2c9f769eba900e4bd5a7a83c095096b48249e` | MAJORITY_AGREE | SUCCESS | **NON_AUTHORITATIVE** (`manifest_incomplete_or_invalid_signatures`; questionLabels empty — LLM never ran) |
+| S7a | Conflicting snapshots — first | `0xc8c010fcee63c0dd649117d49dd1db68bd010273e526b00ee60837308ea464fe` | MAJORITY_AGREE | SUCCESS | **AGREED** (seals room) |
+| S7b | **Conflicting snapshots — second** | `0x1cee6d0baafe3544aa0edede913093ba28e6c8030bbb9f5fa2a8864497aa9633` | MAJORITY_AGREE | SUCCESS | **NON_AUTHORITATIVE** (`conflicting_snapshot`) |
+| S8 | **AUTHORITY: unmanifested (no participant sigs)** | `0xc2d437f805b21658493b1e1fb7e2e310b3c701181f366ff955deeae1c26614eb` | MAJORITY_AGREE | SUCCESS | **NON_AUTHORITATIVE** (`manifest_incomplete_or_invalid_signatures`; LLM never ran) |
 
-**Note on S2 (the grounding gate working live):** on the first S2 run the
-live validator LLM returned otherwise-PASS labels but cited record ids that
-do not exist in the authenticated transcript. The contract's deterministic
-grounding gate (`evidence_grounded`) caught the ungrounded citations,
-marked them FAIL, and derived the fail-safe INSUFFICIENT_EVIDENCE instead
-of trusting the leader's PASS labels — exactly the defense the Steward
-required ("leader output alone is never trusted"). The S2b re-run with a
-fresh room shows the grounded path: correct citations → no_contradiction
-FAIL → NOT_AGREED. Both outcomes are non-AGREED; the gate makes invented
-evidence unable to produce AGREED.
+**Room seal (S7):** `get_room_seal("gendid-live-s7")` read back live =
+`02155affb205d51cee8cbe58d3e2eceac714018b1e1e6f4bbff38df196121944` —
+equals S7a's transcriptCommitment: the room is pinned to the FIRST
+authoritative snapshot; the second (altered) snapshot is deterministically
+non-authoritative forever.
+
+**Note on S2 (the grounding gate working live, again):** as on the 1.1
+deployment, the first dispute run's live validator LLM returned
+otherwise-PASS labels with invented citations; the deterministic grounding
+gate marked them FAIL and derived INSUFFICIENT_EVIDENCE (fail-safe, never
+AGREED). The S2b re-run on a fresh room shows the grounded path: correct
+citations → no_contradiction FAIL → NOT_AGREED. Both outcomes are
+non-AGREED; invented evidence can never produce AGREED.
+
+**S6 is the exact second-Steward scenario:** the truthful transcript ends
+in a cancellation; the caller submits only offer+acceptance (all records
+individually validly signed) carrying the FULL manifest's signatures.
+On-chain: NON_AUTHORITATIVE — the derived manifest of the 2-record subset
+differs from the signed 3-record manifest, so the signatures do not
+verify against it, and the adjudication never runs.
 
 On-chain agreement records (read back via `get_agreement`): see
 `docs/deployment_log.json` (checked into the repo) for the full records
 including recordCounts, questionLabels, and the transcriptCommitment for
-every scenario above.
+every scenario above (under the `gendid/1.2 (CURRENT PRODUCTION)` key).
 
-## Browser E2E (gendid/1.1 contract, full live path, 2026-09-10)
+## Browser E2E (gendid/1.2 contract, full live path, 2026-09-11)
 
 - Driven with Playwright against the real frontend (`scripts/e2e_browser_live.py`,
-  local static serve): Demo A → browser strict verification (3 AUTHENTIC_SIGNED)
-  → LIVE Judge submit → on-chain status.
-- Live tx `0xd63b11e57ba16495505638e4ad52a08704af1611c740a3fbb331b2ef3a6615b0`
+  local static serve of the deployed frontend/ tree): Demo A → browser strict
+  verification (3 AUTHENTIC_SIGNED, 3/3 manifest signatures) → LIVE Judge
+  submit → on-chain status.
+- The dApp UI pinned and displayed the new contract
+  (`studionet · contract 0xfb861614…8dD4B1`).
+- Live tx `0x6dbe829e0f4ffe539550919987078148ccb0c02621d744cc01c7df371c91f2ff`
   (in-browser burner writer) — on-chain status **AGREED**.
-- **Canonicalization parity, live**: browser-computed
-  `evidenceHash e9dd0be4691b2077d4f59a2055509914ef4278816035cf9f97fdae240498daef`
+- **Canonicalization + authority parity, live**: browser-computed
+  `evidenceHash 3dc3e204fbca17254a12e949f1f9744086cbae53c6f03b41a1871038f1f03bbe`
   == the on-chain record's evidenceHash (read back via `get_agreement` for
-  `GD-gendid-demo-01-e9dd0be4691b2077`), byte-identical — the JS and Python
-  implementations produce the same canonical bytes on a real consensus run.
-- UI fix found during this E2E: the **Judge Agreement** button lived inside a
-  section that only the judge handler itself could reveal (unclickable by a
-  real user — a pre-existing bug since the first release). Verification now
-  reveals the adjudication panel; fixed in `frontend/gendid-app.js`.
+  `GD-gendid-demo-01-3dc3e204fbca1725`,
+  `scripts/e2e_readback_v12.py`), byte-identical; transcriptCommitment
+  `1836a917253d145e3cccc29048666bec02b556f4ad706b21540e4a2e052530be` read
+  back on-chain; all six question labels PASS. The in-browser manifest
+  signing (demo participant keys) produced an authoritative snapshot that
+  passed the on-chain authority gate.
 
 ---
 

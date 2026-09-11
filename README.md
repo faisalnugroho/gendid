@@ -9,19 +9,20 @@ all participants jointly sign the transcript manifest that binds the exact
 record set (gendid/1.2 snapshot authority).
 
 > Live on GenLayer StudioNet: contract
-> [`0xF3A0Fc40Cc75FbCb9Ae24E1250D67cEe5A13158a`](https://explorer-studio.genlayer.com/address/0xF3A0Fc40Cc75FbCb9Ae24E1250D67cEe5A13158a)
-> — gendid/1.1 steward-hardened build, deployed, smoke-tested (incl. the
-> live Steward attack rejection), and browser-verified end-to-end (see
+> [`0xfb861614e3f274bc3e3253cd0857c70fc08dD4B1`](https://explorer-studio.genlayer.com/address/0xfb861614e3f274bc3e3253cd0857c70fc08dD4B1)
+> — gendid/1.2 snapshot-authority build, deployed + smoke-tested (incl. the
+> live Steward attack rejection and the live subset/conflict/unmanifested
+> authority rejections), browser-verified end-to-end (see
 > [Verified live results](#verified-live-results) and
 > [docs/LIVE_DEPLOYMENT.md](docs/LIVE_DEPLOYMENT.md)).
 >
 > **Try it: https://faisalnugroho.github.io/gendid/**
 >
-> The pre-hardening `0xb865…` deployment is preserved in
-> [docs/LIVE_DEPLOYMENT.md](docs/LIVE_DEPLOYMENT.md) as history; the
-> steward-hardened contract replaced it because the fix changes verified
-> code (strict Ed25519 validation, order binding, grounding gates —
-> see [docs/SECURITY.md](docs/SECURITY.md)).
+> The pre-hardening `0xb865…` and steward-1.1 `0xF3A0…` deployments are
+> preserved in [docs/LIVE_DEPLOYMENT.md](docs/LIVE_DEPLOYMENT.md) as
+> history; gendid/1.2 replaced them because the snapshot-authority change
+> alters verified contract code (see
+> [docs/SECURITY.md](docs/SECURITY.md)).
 
 ---
 
@@ -150,14 +151,20 @@ Steward cases A–I). Full model: [docs/PROTOCOL.md §3.4](docs/PROTOCOL.md).
 
 All results below were observed on the real StudioNet chain
 ([docs/LIVE_DEPLOYMENT.md](docs/LIVE_DEPLOYMENT.md), every tx hash independently
-re-verified against the explorer):
+re-verified against the explorer; contract
+`0xfb861614e3f274bc3e3253cd0857c70fc08dD4B1`, deploy tx
+`0xcf79982851cc…cc816`, deployed source byte-identical to this repo):
 
 | scenario | tx | consensus result | on-chain status |
 |---|---|---|---|
-| Clear agreement | [`0xec7f…767f`](https://explorer-studio.genlayer.com/tx/0xec7f73f84e205f4c5bdf0f29e42da81723ff63d8b4c7124eef2627cb381d767f) | MAJORITY_AGREE | **AGREED** |
-| Contradiction/dispute | [`0xb851…140e4`](https://explorer-studio.genlayer.com/tx/0xb8518b8758622d942f81e9ad595cd9803afe250a08bbcaf49a1800b771c140e4) | MAJORITY_AGREE | **NOT_AGREED** |
-| Vague/ambiguous | [`0xa612…f17367`](https://explorer-studio.genlayer.com/tx/0xa6128b28a2c26858e005feb5e2513dd7fb7122e9103906d7f17b324069f17367) | MAJORITY_AGREE | **NOT_AGREED** (offer lacked concrete terms) |
-| Tampered signature (negative) | [`0xc7d1…bf2d`](https://explorer-studio.genlayer.com/tx/0xc7d1a129acd10cc50231c4dba77ca9910e61eb360f31965856c1a4baa6d2bf2d) | MAJORITY_AGREE | **INSUFFICIENT_EVIDENCE** (gate: tampered record rejected) |
+| Clear agreement | [`0x0ed0…a01e`](https://explorer-studio.genlayer.com/tx/0x0ed03edd22e220c0f5e9396190a667871c1e79ad4052018e6ea47a101893a01e) | MAJORITY_AGREE | **AGREED** |
+| Contradiction/dispute | see S2b in [docs/LIVE_DEPLOYMENT.md](docs/LIVE_DEPLOYMENT.md) | MAJORITY_AGREE | **NOT_AGREED** / **INSUFFICIENT_EVIDENCE** (fail-safe family; see note) |
+| Vague/ambiguous | [`0x8ee4…fd35`](https://explorer-studio.genlayer.com/tx/0x8ee48c8bf6831d758beae5063cc622b982bad7cbd0526f28daacd8a66822fd35) | MAJORITY_AGREE | **NOT_AGREED** (offer lacked concrete terms) |
+| Tampered signature (negative) | [`0x1314…a96f`](https://explorer-studio.genlayer.com/tx/0x13141447b738b49235de6f8b9a54d220a2e3820e4c4d5abdda188dcb6e07a96f) | MAJORITY_AGREE | **INSUFFICIENT_EVIDENCE** (gate: tampered record rejected) |
+| **Steward attack live** (identity key + zero-scalar sig) | [`0xc335…e440`](https://explorer-studio.genlayer.com/tx/0xc335f8894409c5ec017eb31a7c462ed55fe7db12fb4fbae75541087c82bae440) | MAJORITY_AGREE | **INSUFFICIENT_EVIDENCE** — attack record INVALID_SIGNATURE on-chain |
+| **Caller-selected subset** (gendid/1.2) | [`0xb7d4…249e`](https://explorer-studio.genlayer.com/tx/0xb7d4a72296ff2b9c2540222667a2c9f769eba900e4bd5a7a83c095096b48249e) | MAJORITY_AGREE | **NON_AUTHORITATIVE** (`manifest_incomplete_or_invalid_signatures`; LLM never ran) |
+| **Conflicting snapshot** (gendid/1.2) | [`0x1cee…9633`](https://explorer-studio.genlayer.com/tx/0x1cee6d0baafe3544aa0edede913093ba28e6c8030bbb9f5fa2a8864497aa9633) | MAJORITY_AGREE | **NON_AUTHORITATIVE** (`conflicting_snapshot`; room sealed by first snapshot) |
+| **Unmanifested submission** (gendid/1.2) | see S8 in [docs/LIVE_DEPLOYMENT.md](docs/LIVE_DEPLOYMENT.md) | MAJORITY_AGREE | **NON_AUTHORITATIVE** (LLM never ran) |
 
 Error paths verified live: bad room name and malformed records revert with
 `gendid: …` UserError payloads (execution ERROR, validators agree the refusal,

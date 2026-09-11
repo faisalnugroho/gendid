@@ -237,7 +237,27 @@ def wait_final(client, tx_hash, label, strict=True):
 
 def read_json(client, addr, fn, args):
     raw = client.read_contract(address=addr, function_name=fn, args=args)
-    return json.loads(raw) if isinstance(raw, str) else raw
+    if not isinstance(raw, str):
+        return raw
+    txt = raw.strip()
+    # Shape observed live on studionet (2026-09-11): get_room_seal returns
+    # the stored commitment DIRECTLY as a 64-char ascii hex string — it is
+    # the value, NOT an encoding of something else. Never unwrap hex-looking
+    # strings; only try JSON, and only fall back to JSON-in-hex when the
+    # string is even-length lowercase-hex AND decodes to ASCII JSON (the
+    # get_agreement path on some SDK builds).
+    try:
+        return json.loads(txt)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    if txt and all(c in "0123456789abcdef" for c in txt) and len(txt) % 2 == 0:
+        try:
+            dec = bytes.fromhex(txt).decode("utf-8", "strict")
+            probe = json.loads(dec)  # only consume the unwrap for real JSON
+            return probe
+        except (ValueError, json.JSONDecodeError):
+            pass
+    return txt
 
 
 # ---------------------------------------------------------------- main
@@ -362,7 +382,7 @@ def compute_agreement_id(room, records):
 
     evidence = mod._classify_records(room, records)
     package = {
-        "protocolVersion": "gendid/1.1",
+        "protocolVersion": "gendid/1.2",
         "transcriptRoom": room,
         "transcriptCommitment": evidence["transcriptCommitment"],
         "records": evidence["records"],

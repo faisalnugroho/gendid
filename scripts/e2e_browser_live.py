@@ -19,7 +19,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend"
-ADDR_PIN = "0xF3A0Fc40Cc75FbCb9Ae24E1250D67cEe5A13158a"
+ADDR_PIN = "0xfb861614e3f274bc3e3253cd0857c70fc08dD4B1"
 
 
 def main():
@@ -37,11 +37,11 @@ def main():
             page.goto("http://127.0.0.1:8123/index.html", wait_until="networkidle")
             page.wait_for_timeout(1500)  # app init writes the pinned-address note async
 
-            # 1) pinned address visible (UI abbreviates to 0xF3A0Fc40…13158a;
+            # 1) pinned address visible (UI abbreviates to 0xfb861614…dD4B1;
             #    #gl-note sits inside a section hidden until first verification,
             #    so read the ELEMENT, not body innerText)
             gl_note = page.inner_text("#gl-note")
-            assert "0xF3A0Fc40" in gl_note and "13158a" in gl_note, \
+            assert "0xfb861614" in gl_note and "d4b1" in gl_note.lower(), \
                 f"pinned address not shown in #gl-note: {gl_note!r}"
             print("[E2E] contract pin shown:", gl_note.strip())
 
