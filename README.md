@@ -166,6 +166,17 @@ re-verified against the explorer; contract
 | **Conflicting snapshot** (gendid/1.2) | [`0x1cee…9633`](https://explorer-studio.genlayer.com/tx/0x1cee6d0baafe3544aa0edede913093ba28e6c8030bbb9f5fa2a8864497aa9633) | MAJORITY_AGREE | **NON_AUTHORITATIVE** (`conflicting_snapshot`; room sealed by first snapshot) |
 | **Unmanifested submission** (gendid/1.2) | see S8 in [docs/LIVE_DEPLOYMENT.md](docs/LIVE_DEPLOYMENT.md) | MAJORITY_AGREE | **NON_AUTHORITATIVE** (LLM never ran) |
 
+**Public demo determinism (gendid/1.2).** The public Demo A builds a
+byte-identical transcript on every page load (fixed nonces → deterministic
+Ed25519 signatures → identical manifest/commitment/evidenceHash). Canonical
+public result, verified live twice from the production URL on fresh page
+loads: agreementId `GD-gendid-demo-01b-9b9a6ce6440da0d6`, status
+**AGREED** both runs (txs `0x6660…d1e2`, `0x6cfa…9ac0`), identical
+evidenceHash `9b9a6ce6…87448` == on-chain record byte-for-byte, room
+`gendid-demo-01b` sealed to the canonical commitment
+`71ba41a3…83d8e67`. Repeated public runs are idempotent — never
+`conflicting_snapshot`. Regression suite: `tests/js/test-parity.mjs` T9.
+
 Error paths verified live: bad room name and malformed records revert with
 `gendid: …` UserError payloads (execution ERROR, validators agree the refusal,
 state unchanged); unknown agreement IDs raise; the UI renders every failure as
@@ -222,8 +233,8 @@ contracts, not to read or to write agreements on StudioNet (no gas charge).
 #     conflict/unsigned/attack/forged-manifest/invariants)
 pytest tests/direct/ -q
 
-# 61 JS/Python parity checks (browser lib vs contract canonicalization)
-#   targeted parity + 23-fixture dual-runner corpus
+# 75 JS/Python parity checks (browser lib vs contract canonicalization)
+#   targeted parity + 23-fixture dual-runner corpus + demo determinism
 #   (valid, unsigned, malformed, every reject reason, attack material,
 #    permutations — full-output byte-equality per fixture)
 #   + manifest derivation/manifestStr/manifest-signature parity
@@ -274,7 +285,7 @@ scripts/error_probes.py       live error-path probes
 scripts/attack_repro.py       Steward-finding attack reproducer
 scripts/e2e_browser_live.py   browser E2E vs the deployed contract
 tests/direct/                 73 direct-mode contract tests (incl. 23 authority)
-tests/js/                     61 JS/Python parity checks incl. 23-fixture corpus
+tests/js/                     75 JS/Python parity checks incl. corpus + demo determinism
 ```
 
 ## Security notes

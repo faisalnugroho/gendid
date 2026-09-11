@@ -97,6 +97,34 @@ every scenario above (under the `gendid/1.2 (CURRENT PRODUCTION)` key).
   signing (demo participant keys) produced an authoritative snapshot that
   passed the on-chain authority gate.
 
+## Public production-URL E2E (deterministic demo, 2026-09-11)
+
+After the deployment above, the public Demo A was made deterministic
+(buildDemo previously used a random nonce jitter, which collided with the
+room seal: room `gendid-demo-01` was sealed by a random snapshot, and
+every later public run was NON_AUTHORITATIVE/conflicting_snapshot — the
+contract behaving CORRECTLY, the demo was nondeterministic). Fix: fixed
+nonces + fresh canonical room. Commit `ca90bd2`.
+
+Canonical public demo (all verified from
+`https://faisalnugroho.github.io/gendid/` on fresh page loads,
+`scripts/e2e_production_url.py`):
+
+- Room: `gendid-demo-01b`
+- agreementId: `GD-gendid-demo-01b-9b9a6ce6440da0d6`
+- evidenceHash: `9b9a6ce6440da0d6a0b2697b7d521ab19bd6823281879099ab5e836ff287a448`
+- transcriptCommitment == room seal:
+  `71ba41a30cd313fe4f4b36b44e9197d5794ac73db1f38fc74054dd86383d8e67`
+- status: **AGREED**, finalized, all six labels PASS
+- Run 1 (fresh load) tx `0x6660621ee269e771d45a9dff202afb6fc7462bd1e782e49f69b201b2476cd1e2`
+- Run 2 (fresh load) tx `0x6cfac3e2e4e3f084ed984d39d7a4a41c4e0d496068a8a1d77eae3fdbe77c9ac0`
+- Both runs FINALIZED, exec SUCCESS, 3-4 validator agrees per round; both
+  produce the IDENTICAL canonical agreementId/evidenceHash (idempotent
+  resubmission of the identical manifest — never conflicting_snapshot).
+- Browser evidenceHash == on-chain evidenceHash, byte-identical; room seal
+  pins the canonical commitment. Old room `gendid-demo-01` remains sealed
+  under the historical random snapshot — permanent, honest history.
+
 ---
 
 # History — gendid/1 deployment (2026-09-08, SUPERSEDED)

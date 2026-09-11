@@ -172,7 +172,7 @@ authority only after the deterministic gate).
 - Adversarial Ed25519: `test_adversarial_ed25519.py` — 16 tests
 - Snapshot authority: `test_authority.py` — 23 tests
 - Order binding: `test_order_binding.py` — 10 tests (total direct: 73)
-- Browser parity + corpus + manifest parity: `test-parity.mjs` — 61 checks
+- Browser parity + corpus + manifest parity + demo determinism: `test-parity.mjs` — 75 checks (incl. T9: the public demo builds byte-identical records/manifest/commitment/evidenceHash on every load — the room-seal idempotency regression)
 - Attack reproducer: `scripts/attack_repro.py` — identity point, all 8
   torsion points, arbitrary message, AND the gendid/1.2 subset /
   insertion / wrong-key / zero-scalar manifest attacks — all rejected

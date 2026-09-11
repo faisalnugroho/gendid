@@ -70,9 +70,10 @@ python -m pytest test_adversarial_ed25519.py test_authority.py \
 #    -> 73 passed
 
 # 5. browser/contract parity + dual-runner corpus + manifest parity
+#    + public-demo determinism (room-seal idempotency regression)
 cd ../..
 node tests/js/test-parity.mjs
-#    -> 61 passed, 0 failed
+#    -> 75 passed, 0 failed
 
 # 6. Steward attack reproducer (identity-point key + zero-scalar sig,
 #    8 torsion points, and the gendid/1.2 snapshot-authority attacks)
@@ -125,7 +126,7 @@ gitignored — never committed.
 1. `pip install -r requirements-test.txt`
 2. seed the pinned GenVM runner tarball
 3. `pytest` (the 4 direct suites, 73 tests)
-4. `node tests/js/test-parity.mjs` (61 checks)
+4. `node tests/js/test-parity.mjs` (75 checks)
 5. `python3 scripts/attack_repro.py` with fatal guards on any accepted
    attack
 
