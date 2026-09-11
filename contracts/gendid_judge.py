@@ -1,5 +1,5 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
-"""GenDid — DID Agreement Judge (gendid/1). Independent prototype.
+"""GenDid — DID Agreement Judge (gendid/1.2). Independent prototype.
 
 Determines what DID-authenticated agents actually agreed to, from their
 cryptographically signed technocore.chat transcript, via GenLayer
@@ -9,10 +9,22 @@ Layers:
   1. DETERMINISTIC evidence gate — classifies every record (Ed25519
      verification over <room>|<nonce>|<swept-text>, exactly technocore's
      signed-lane canonical string) and fails closed before any LLM runs.
-  2. NON-DETERMINISTIC labeling — leader LLM labels six bounded questions
+  2. DETERMINISTIC snapshot authority gate (gendid/1.2) — the contract
+     derives a canonical transcript MANIFEST from the authenticated record
+     set (room, record count, ordered record ids, per-record digests,
+     participant set, transcript commitment) and requires EVERY participant
+     to have Ed25519-signed that exact manifest string. This is the
+     authoritative transcript snapshot: a caller-selected subset, an
+     inserted record, a reordered chronology, or a changed attribution
+     alters the derived manifest and invalidates the signatures — the
+     submission is recorded NON_AUTHORITATIVE and the LLM never runs.
+     The first authoritative finalization seals the room on-chain; any
+     conflicting manifest for the same room is NON_AUTHORITATIVE
+     (deterministic first-wins conflict rule).
+  3. NON-DETERMINISTIC labeling — leader LLM labels six bounded questions
      PASS/FAIL/UNCERTAIN with cited record ids; validators independently
      re-run and compare decision-bearing fields only (Equivalence Principle).
-  3. DETERMINISTIC derivation — the contract, not the LLM, computes the
+  4. DETERMINISTIC derivation — the contract, not the LLM, computes the
      final status from the labels (LLM labels, CONTRACT derives).
 
 The transcript is untrusted evidence: instructions inside record text are
@@ -344,6 +356,7 @@ STATUS_INSUFFICIENT = "INSUFFICIENT_EVIDENCE"
 STATUS_AGREED = "AGREED"
 STATUS_NOT_AGREED = "NOT_AGREED"
 STATUS_AMBIGUOUS = "AMBIGUOUS"
+STATUS_NON_AUTH = "NON_AUTHORITATIVE"
 
 
 def _load_records_arg(records_json: str) -> list:
@@ -748,6 +761,166 @@ def _classify_records(room: str, raw_records: list) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# TRANSCRIPT SNAPSHOT AUTHORITY (gendid/1.2)
+#
+# Problem being solved: the caller of submit_evidence chooses the record set.
+# The per-record DID signatures authenticate each record's content, and the
+# transcript commitment chains the supplied package — but neither proves the
+# package is the COMPLETE authoritative room history rather than a
+# caller-selected subset. A caller could omit a contradicting record and
+# submit only the favorable records.
+#
+# Solution: a jointly-authenticated immutable transcript manifest.
+#
+#   manifest = canonical JSON object (fully derived from the authenticated
+#              record set by BOTH the contract and the browser — never
+#              caller-supplied):
+#     protocolVersion, room, recordCount, recordIds (canonical order),
+#     recordDigests (sha256(canonical_json(record_core_i)) per record,
+#     canonical order), participants (sorted), transcriptCommitment
+#
+#   manifestStr  = "<room>|<recordCount>|<recordIds joined by ,>||
+#                   <participants joined by ,>|<transcriptCommitment>"
+#   authority    = every participant (each distinct senderDid of the
+#                  AUTHENTIC record set) must provide an Ed25519 signature
+#                  over manifestStr, made with the SAME key that signed
+#                  their records (verified via their did:key).
+#
+# Security property (exact, not vibes): each manifest signature is a fresh
+# Ed25519 signature by that participant over the entire derived manifest
+# string. Because the manifest binds recordCount, the ordered record id list,
+# the per-record digests (content), the participant set, and the commitment:
+#   - OMIT a record          -> recordCount/digest list changes -> old
+#                               manifest signatures no longer verify
+#   - INSERT a record        -> same (even a genuinely signed new record)
+#   - REORDER the chronology -> canonical order is (nonce, seq, id): a
+#                               different chronology is a different manifest
+#   - CHANGE any text/nonce  -> record digest changes -> invalid
+#   - CHANGE attribution     -> participant set / digests change -> invalid
+#   - SWAP a signer's key    -> the manifest signature must come from the
+#                               record-set participant's did:key, verified
+#                               with the same strict Ed25519 layer
+# No honest party ever signs a manifest whose record set differs from the
+# room transcript they saw, so a caller cannot mint authority for a subset
+# without the participants' keys.
+#
+# A submission whose authority fails (or whose room was already sealed by a
+# different authoritative manifest) is recorded NON_AUTHORITATIVE with a
+# machine-readable reason and the LLM NEVER runs on it.
+# ---------------------------------------------------------------------------
+
+
+def _record_digest(record: dict) -> str:
+    """sha256 over the canonical core of ONE record (identity of content)."""
+    core = {
+        k: record[k]
+        for k in ("recordId", "room", "sequence", "senderDid", "nonce",
+                  "signature", "text")
+        if k in record
+    }
+    return _sha256_hex(_canonical_json(core).encode("utf-8"))
+
+
+def _build_manifest(room: str, evidence: dict) -> dict:
+    """Derive the canonical transcript manifest from classification output.
+
+    Pure function of the AUTHENTIC record set (canonical order). Mirrored
+    byte-exactly by frontend/lib/gendid-lib.js buildManifest (parity corpus).
+    """
+    ordered_auth = [
+        r for r in evidence["records"] if r.get("signatureStatus") == AUTHENTIC
+    ]
+    return {
+        "protocolVersion": "gendid/1.2",
+        "room": room,
+        "recordCount": len(ordered_auth),
+        "recordIds": [r["recordId"] for r in ordered_auth],
+        "recordDigests": [_record_digest(r) for r in ordered_auth],
+        "participants": evidence["participants"],
+        "transcriptCommitment": evidence["transcriptCommitment"],
+    }
+
+
+def _manifest_str(manifest: dict) -> str:
+    """The exact string every participant signs (cross-runtime stable)."""
+    return "%s|%s|%s|%s|%s" % (
+        manifest["room"],
+        manifest["recordCount"],
+        ",".join(manifest["recordIds"]),
+        ",".join(manifest["participants"]),
+        manifest["transcriptCommitment"],
+    )
+
+
+def _verify_authority(manifest: dict, signatures, evidence: dict) -> dict:
+    """Verify the snapshot authority of a manifest.
+
+    signatures: {senderDid: base64url(64-byte Ed25519 sig over manifestStr)}.
+    Returns {"ok": bool, "reason": str, "missing": [did...], "verified": [did...]}.
+    The SAME strict Ed25519 layer that guards records guards the manifest:
+    small-order keys, non-canonical encodings, malleated scalars all reject.
+    """
+    mstr = _manifest_str(manifest)
+    out = {"ok": False, "reason": "", "missing": [], "verified": []}
+    if not isinstance(signatures, dict):
+        out["reason"] = "manifest_signatures_not_object"
+        return out
+    verified = []
+    missing = []
+    for did in evidence["participants"]:
+        sig = signatures.get(did, "")
+        if not isinstance(sig, str) or not sig:
+            missing.append(did)
+            continue
+        pubkey = did_to_pubkey(did)
+        if pubkey is None:
+            out["reason"] = "manifest_signer_did_undecodable"
+            return out
+        try:
+            sig_bytes = base64.urlsafe_b64decode(sig + "==")
+        except Exception:
+            out["reason"] = "manifest_signature_not_base64url"
+            return out
+        if len(sig_bytes) != 64:
+            out["reason"] = "manifest_signature_not_64_bytes"
+            return out
+        if base64.urlsafe_b64encode(sig_bytes).decode().rstrip("=") != sig:
+            out["reason"] = "manifest_signature_non_canonical_base64url"
+            return out
+        if pubkey in _SMALL_ORDER_ENC:
+            out["reason"] = "manifest_signature_small_order_key"
+            return out
+        if _point_decompress(pubkey) is None:
+            out["reason"] = "manifest_signature_non_canonical_key_encoding"
+            return out
+        if sig_bytes[:32] in _SMALL_ORDER_ENC:
+            out["reason"] = "manifest_signature_small_order_R"
+            return out
+        if _point_decompress(sig_bytes[:32]) is None:
+            out["reason"] = "manifest_signature_non_canonical_R"
+            return out
+        s_int = int.from_bytes(sig_bytes[32:], "little")
+        if s_int >= _L:
+            out["reason"] = "manifest_signature_non_canonical_scalar"
+            return out
+        if s_int == 0:
+            out["reason"] = "manifest_signature_zero_scalar"
+            return out
+        if not ed25519_verify(pubkey, mstr.encode("utf-8"), sig_bytes):
+            missing.append(did)
+            continue
+        verified.append(did)
+    if missing:
+        out["reason"] = "manifest_incomplete_or_invalid_signatures"
+        out["missing"] = missing
+        out["verified"] = verified
+        return out
+    out["ok"] = True
+    out["verified"] = verified
+    return out
+
+
 def _tclk_tag(text: str) -> str:
     """Display-only tclk/1 frame recognition: 'tclk1 {json}' prefix."""
     if not text.startswith("tclk1 "):
@@ -789,6 +962,18 @@ def _build_prompt(facts: dict) -> str:
         "Only records with signatureStatus=AUTHENTIC_SIGNED are authenticated, "
         "identity-attributed statements. Records with any other status are context "
         "only and can NEVER establish a commitment, acceptance, or agreement."
+    )
+    lines.append("")
+    lines.append(
+        "This transcript snapshot has passed the deterministic snapshot "
+        "authority gate: every authenticated participant signed the "
+        "transcript manifest, so the record set below is jointly "
+        "authoritative for this room. Adjudicate ONLY this snapshot."
+    )
+    lines.append("")
+    lines.append(
+        "Transcript manifest (the jointly-signed commitment binding the "
+        "exact record set): %s" % facts.get("manifestStr", "")
     )
     lines.append("")
     lines.append(
@@ -972,28 +1157,37 @@ def _clip(v, n) -> str:
 
 
 class GenDidJudge(gl.Contract):
-    """gendid/1 — DID Agreement Judge.
+    """gendid/1.2 — DID Agreement Judge.
 
-    submit_evidence(room, records_json) -> adjudicates or fail-safes.
-    Storage: agreements: TreeMap[str, str] (agreementId -> JSON record).
+    submit_evidence(room, records_json, manifest_signatures_json) ->
+    adjudicates or fail-safes. Returns the agreementId.
+
+    Storage: agreements: TreeMap[str, str] (agreementId -> JSON record);
+    room_seals: TreeMap[str, str] (room -> sealed transcriptCommitment —
+    the deterministic conflict rule for competing snapshots of one room).
     """
 
     agreements: TreeMap[str, str]
     agreement_count: u256
+    room_seals: TreeMap[str, str]
 
     def __init__(self) -> None:
         self.agreements = TreeMap()
         self.agreement_count = u256(0)
+        self.room_seals = TreeMap()
 
     # ------------------------------------------------------- write: adjudicate
 
     @gl.public.write
-    def submit_evidence(self, room: str, records_json: str) -> str:
-        """Adjudicate one transcript. Returns the agreementId.
+    def submit_evidence(
+        self, room: str, records_json: str, manifest_signatures_json: str
+    ) -> str:
+        """Adjudicate one transcript snapshot. Returns the agreementId.
 
-        Deterministic gate -> LLM labels (consensus) -> deterministic
-        derivation. Every failure path yields a well-formed record; nothing
-        ever silently becomes AGREED.
+        Deterministic gate -> snapshot authority gate -> LLM labels
+        (consensus) -> deterministic derivation. Every failure path yields
+        a well-formed record; nothing ever silently becomes AGREED, and the
+        LLM only ever runs on an AUTHORITATIVE snapshot.
         """
         if not ROOM_RE.fullmatch(room):
             raise gl.vm.UserError("gendid: bad room name")
@@ -1001,7 +1195,7 @@ class GenDidJudge(gl.Contract):
 
         evidence = _classify_records(room, raw_records)
         package = {
-            "protocolVersion": "gendid/1.1",
+            "protocolVersion": "gendid/1.2",
             "transcriptRoom": room,
             "transcriptCommitment": evidence["transcriptCommitment"],
             "records": evidence["records"],
@@ -1024,7 +1218,7 @@ class GenDidJudge(gl.Contract):
 
         base_record = {
             "agreementId": agreement_id,
-            "protocolVersion": "gendid/1.1",
+            "protocolVersion": "gendid/1.2",
             "evidenceHash": _evidence_hash(package),
             "transcriptRoom": room,
             "transcriptCommitment": evidence["transcriptCommitment"],
@@ -1044,10 +1238,6 @@ class GenDidJudge(gl.Contract):
         }
 
         # ---------------- deterministic gate ----------------
-        # (note: a transcript with exactly ONE authentic record is NOT gated
-        # out here — it proceeds to adjudication, which labels
-        # acceptance_present FAIL => NOT_AGREED. The gate only fires when
-        # there is nothing authenticated at all, or nobody to agree with.)
         gate_fail = ""
         if counts[AUTHENTIC] == 0:
             gate_fail = "no_authentic_records"
@@ -1064,6 +1254,52 @@ class GenDidJudge(gl.Contract):
             self._store(agreement_id, base_record)
             return agreement_id
 
+        # ---------------- snapshot authority gate (gendid/1.2) -------------
+        manifest = _build_manifest(room, evidence)
+        base_record["manifest"] = manifest
+        base_record["manifestStr"] = _manifest_str(manifest)
+        try:
+            sigs = json.loads(manifest_signatures_json) \
+                if manifest_signatures_json else {}
+        except Exception:
+            sigs = None
+        auth = _verify_authority(manifest, sigs, evidence)
+        base_record["authority"] = {
+            "verified": auth["verified"],
+            "missing": auth["missing"],
+        }
+        if not auth["ok"]:
+            base_record["status"] = STATUS_NON_AUTH
+            base_record["finalized"] = True
+            base_record["errorReason"] = auth["reason"] or "non_authoritative"
+            base_record["adjudicationSummary"] = (
+                "Snapshot authority failed: %s — the transcript snapshot is "
+                "not jointly signed by every authenticated participant, so "
+                "it is not the authoritative room history. No adjudication "
+                "ran; no agreement can be asserted from this submission."
+                % (auth["reason"] or "non_authoritative")
+            )
+            self._store(agreement_id, base_record)
+            return agreement_id
+
+        # ---------------- room-seal conflict rule ----------------
+        # The first AUTHORITATIVE finalization for a room seals that room's
+        # commitment on-chain. Any LATER submission of a DIFFERENT manifest
+        # for the same room is NON_AUTHORITATIVE (conflicting_snapshot) —
+        # two conflicting snapshots can never both be authoritative.
+        sealed = self.room_seals.get(room, "")
+        if sealed and sealed != manifest["transcriptCommitment"]:
+            base_record["status"] = STATUS_NON_AUTH
+            base_record["finalized"] = True
+            base_record["errorReason"] = "conflicting_snapshot"
+            base_record["adjudicationSummary"] = (
+                "Room %s was already sealed on-chain under a different "
+                "transcript commitment; this conflicting snapshot cannot "
+                "become authoritative." % room
+            )
+            self._store(agreement_id, base_record)
+            return agreement_id
+
         # ---------------- non-deterministic labeling ----------------
         authentic_ids = evidence["authentic_ids"]
         authentic_by_id = evidence["authentic_by_id"]
@@ -1073,6 +1309,7 @@ class GenDidJudge(gl.Contract):
                 {
                     "records": evidence["records"],
                     "transcriptCommitment": evidence["transcriptCommitment"],
+                    "manifestStr": _manifest_str(manifest),
                 }
             )
             raw = gl.nondet.exec_prompt(prompt, response_format="json")
@@ -1219,6 +1456,10 @@ class GenDidJudge(gl.Contract):
         base_record["adjudicationSummary"] = summary
         base_record["updatedAt"] = now_iso
         self._store(agreement_id, base_record)
+        # Seal the room under this authoritative commitment (deterministic
+        # conflict rule; see room-seal comment above).
+        if not self.room_seals.get(room, ""):
+            self.room_seals[room] = manifest["transcriptCommitment"]
         return agreement_id
 
     # ------------------------------------------------------- views
@@ -1235,6 +1476,16 @@ class GenDidJudge(gl.Contract):
     @gl.public.view
     def get_agreement_count(self) -> u256:
         return self.agreement_count
+
+    @gl.public.view
+    def get_room_seal(self, room: str) -> str:
+        """The sealed authoritative transcriptCommitment for a room ('' if
+        none). Two conflicting snapshots of one room can never both be
+        authoritative: after the first authoritative finalization this seal
+        pins the room's commitment on-chain."""
+        if not isinstance(room, str) or not ROOM_RE.fullmatch(room):
+            raise gl.vm.UserError("gendid: bad room name")
+        return self.room_seals.get(room, "")
 
     # ------------------------------------------------------- internal
 

@@ -40,7 +40,35 @@ function check(name, cond, extra) {
 // contract file) to sign/classify/hash — guaranteeing we test against the real
 // implementation, not a re-implementation.
 const CONTRACT = new URL("../../contracts/gendid_judge.py", import.meta.url).pathname;
-const PY = "/usr/bin/python3";
+
+// Python interpreter for the contract-side parity runner. Resolution order:
+//   1. GENDID_PYTHON env var (explicit override)
+//   2. `python3.12` on PATH (the contract runtime version — required)
+//   3. `python3` on PATH, version-verified >= 3.12
+// No absolute, environment-specific path is hardcoded (the previous
+// /usr/bin/python3 was an environment-specific assumption that broke on
+// machines where it is 3.11 while the contract syntax requires 3.12+).
+function resolvePython() {
+  const { execFileSync } = require("node:child_process");
+  const candidates = [];
+  if (process.env.GENDID_PYTHON) candidates.push(process.env.GENDID_PYTHON);
+  candidates.push("python3.12", "python3");
+  for (const cand of candidates) {
+    try {
+      const ver = execFileSync(cand, ["-c", "import sys; print(sys.version_info[0]*100+sys.version_info[1])"], { encoding: "utf8" }).trim();
+      if (parseInt(ver, 10) >= 312) {
+        return { cmd: cand, version: ver };
+      }
+      console.log(`  note: ${cand} is < 3.12 (${ver}), skipping`);
+    } catch { /* not on PATH */ }
+  }
+  throw new Error(
+    "No Python >= 3.12 found for the parity runner. Install Python 3.12+ " +
+    "or set GENDID_PYTHON to the interpreter path. (The contract code " +
+    "requires the 3.12 runtime syntax; see docs/REPRODUCIBILITY.md.)");
+}
+const PY_INFO = resolvePython();
+const PY = PY_INFO.cmd;
 
 function pyRunner(code, payload) {
   const dir = mkdtempSync(join(tmpdir(), "gendid-parity-"));
@@ -214,7 +242,7 @@ console.log("T4  evidenceHash parity (JS sha256Hex == contract _evidence_hash)")
   const r = pyRunner(`${pyPrelude}
 room = _payload["room"]
 cls = G._classify_records(room, _payload["records"])
-package = {"protocolVersion": "gendid/1.1", "transcriptRoom": room, "transcriptCommitment": cls["transcriptCommitment"], "records": cls["records"]}
+package = {"protocolVersion": "gendid/1.2", "transcriptRoom": room, "transcriptCommitment": cls["transcriptCommitment"], "records": cls["records"]}
 eh = G._evidence_hash(package)
 agreement = "GD-" + room[:24] + "-" + eh[:16]
 print(json.dumps({"hash": eh, "agreement": agreement, "counts": cls["counts"], "participants": cls["participants"], "commitment": cls["transcriptCommitment"]}))
@@ -360,7 +388,7 @@ out = []
 for f in _payload:
     room = f["room"]
     cls = G._classify_records(room, f["records"])
-    package = {"protocolVersion": "gendid/1.1", "transcriptRoom": room,
+    package = {"protocolVersion": "gendid/1.2", "transcriptRoom": room,
                "transcriptCommitment": cls["transcriptCommitment"], "records": cls["records"]}
     eh = G._evidence_hash(package)
     agr = "GD-" + room[:24] + "-" + eh[:16]
@@ -404,6 +432,120 @@ print(json.dumps(out))
     if (JSON.stringify(js.records) !== JSON.stringify(p.records)) bits.push(`records differ`);
     if (js.hash !== p.hash) bits.push(`hash ${js.hash} vs ${p.hash}`);
     return bits.join("; ");
+  }
+}
+
+
+// ---------------------------------------------------------------- T8 manifest parity
+// Steward requirement: browser and contract derive the SAME transcript
+// manifest (and the same signed-string) for every transcript — the
+// authority layer must be byte-identical across runtimes, for valid,
+// rejected, and unsigned records alike.
+console.log("T8  transcript manifest parity (authority layer, full compare)");
+{
+  const room = "gendid-demo-01";
+  const idA = GD.identityFromSeed("c".repeat(64));
+  const idB = GD.identityFromSeed("d".repeat(64));
+  const OFFER_TEXT = "Task: normalize CSV. Output JSON. Price 5 credits.";
+  const ACCEPT_TEXT = "Accepted. Send the JSON here.";
+
+  const rec = (id, seq, nonce, text) => ({
+    recordId: `gdr-${room}-${seq}`, room, sequence: seq,
+    senderDid: id.did, nonce,
+    signature: GD.signSay(id, room, nonce, GD.swept(text)), text: GD.swept(text),
+  });
+  const r1 = rec(idA, 1, "1757318042512", OFFER_TEXT);
+  const r2 = rec(idB, 2, "1757318049100", ACCEPT_TEXT);
+
+  const transcriptSets = [
+    { name: "valid 2-record", records: [r1, r2] },
+    { name: "valid + unsigned noise", records: [r1, r2, { ...r1, sequence: 9, nonce: "", signature: "", senderDid: "listener" }] },
+    { name: "rejected record present", records: [r1, { ...r2, text: ACCEPT_TEXT + " tampered" }] },
+    { name: "permutation", records: [r2, r1] },
+  ];
+
+  for (const t of transcriptSets) {
+    // JS side: classify + buildManifest
+    const cls = await GD.classifyTranscript(room, t.records);
+    const jsManifest = await GD.buildManifest(room, cls);
+    const jsStr = GD.manifestStr(jsManifest);
+    const jsJson = JSON.stringify(jsManifest);
+
+    // Python side: the REAL contract functions
+    const py = pyRunner(`${pyPrelude}
+cls = G._classify_records(room=_payload["room"], raw_records=_payload["records"])
+m = G._build_manifest(_payload["room"], cls)
+s = G._manifest_str(m)
+print(json.dumps({"manifest": m, "str": s}))
+`, { room, records: t.records });
+    const pyJson = JSON.stringify(py.manifest);
+    check(`manifest ${t.name}: object identical`, jsJson === pyJson,
+      jsJson === pyJson ? "" : `${jsJson.slice(0, 160)} vs ${pyJson.slice(0, 160)}`);
+    check(`manifest ${t.name}: signed string identical`, jsStr === py.str, `${jsStr} vs ${py.str}`);
+  }
+
+  // manifest-signature cross-verification: JS signs, Python verifies with
+  // the contract's _verify_authority; Python signs, JS verifies with
+  // GD.verifyAuthority — both directions must agree.
+  {
+    const cls = await GD.classifyTranscript(room, [r1, r2]);
+    const manifest = await GD.buildManifest(room, cls);
+    const mstr = GD.manifestStr(manifest);
+    const jsSigs = {};
+    jsSigs[idA.did] = GD.b64url(nacl.sign.detached(new TextEncoder().encode(mstr), idA.kp.secretKey));
+    jsSigs[idB.did] = GD.b64url(nacl.sign.detached(new TextEncoder().encode(mstr), idB.kp.secretKey));
+
+    const pyVerdict = pyRunner(`${pyPrelude}
+import base64 as _b64
+cls = G._classify_records(room=_payload["room"], raw_records=_payload["records"])
+m = G._build_manifest(_payload["room"], cls)
+v = G._verify_authority(m, _payload["sigs"], cls)
+print(json.dumps({"ok": v["ok"], "reason": v["reason"], "verified": sorted(v["verified"])}))
+`, { room, records: [r1, r2], sigs: jsSigs });
+    check("JS-signed manifest verifies in contract verifier", pyVerdict.ok === true, JSON.stringify(pyVerdict));
+
+    // tamper one JS sig -> contract verifier must fail with the reason
+    const badSigs = { ...jsSigs };
+    badSigs[idB.did] = jsSigs[idB.did].slice(0, -2) + "AA";
+    const pyVerdictBad = pyRunner(`${pyPrelude}
+cls = G._classify_records(room=_payload["room"], raw_records=_payload["records"])
+m = G._build_manifest(_payload["room"], cls)
+v = G._verify_authority(m, _payload["sigs"], cls)
+print(json.dumps({"ok": v["ok"], "reason": v["reason"], "missing": v["missing"]}))
+`, { room, records: [r1, r2], sigs: badSigs });
+    check("tampered JS manifest sig rejected by contract verifier", pyVerdictBad.ok === false, JSON.stringify(pyVerdictBad));
+    check("tampered reason is missing-participant family", pyVerdictBad.reason === "manifest_incomplete_or_invalid_signatures", pyVerdictBad.reason);
+
+    // Python signs, JS verifies
+    const pySigs = pyRunner(`${pyPrelude}
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+import base64 as _b64
+cls = G._classify_records(room=_payload["room"], raw_records=_payload["records"])
+m = G._build_manifest(_payload["room"], cls)
+s = G._manifest_str(m)
+def _py_did_of(key):
+    pub = key.public_key().public_bytes_raw()
+    n = int.from_bytes(b"\\xed\\x01" + pub, "big")
+    B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    out = ""
+    while n:
+        n, rem = divmod(n, 58)
+        out = B58[rem] + out
+    return "did:key:z" + out
+sigs = {}
+for seed_hex in ("${"c".repeat(64)}", "${"d".repeat(64)}"):
+    key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(seed_hex))
+    sigs[_py_did_of(key)] = _b64.urlsafe_b64encode(key.sign(s.encode())).decode().rstrip("=")
+print(json.dumps(sigs))
+`, { room, records: [r1, r2] });
+    const jsVerdict = await GD.verifyAuthority(cls, pySigs);
+    check("Python-signed manifest verifies in JS verifier", jsVerdict.ok === true, JSON.stringify(jsVerdict));
+
+    // omit one Python sig -> JS verifier fails with missing
+    const partial = { ...pySigs };
+    delete partial[idB.did];
+    const jsVerdictBad = await GD.verifyAuthority(cls, partial);
+    check("partial Python sigs rejected by JS verifier", jsVerdictBad.ok === false && jsVerdictBad.reason === "manifest_incomplete_or_invalid_signatures", JSON.stringify(jsVerdictBad));
   }
 }
 

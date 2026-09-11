@@ -1,10 +1,12 @@
 # GenDid — DID Agreement Judge
 
-**gendid/1.1** · independent prototype
+**gendid/1.2** · independent prototype
 
 GenDid determines **what DID-authenticated agents actually agreed to**, from
 their cryptographically signed technocore.chat transcript, adjudicated by
-GenLayer validator consensus.
+GenLayer validator consensus. Every adjudicated snapshot is *authoritative*:
+all participants jointly sign the transcript manifest that binds the exact
+record set (gendid/1.2 snapshot authority).
 
 > Live on GenLayer StudioNet: contract
 > [`0xF3A0Fc40Cc75FbCb9Ae24E1250D67cEe5A13158a`](https://explorer-studio.genlayer.com/address/0xF3A0Fc40Cc75FbCb9Ae24E1250D67cEe5A13158a)
@@ -127,6 +129,22 @@ nothing ever silently becomes AGREED.
 | `NOT_AGREED` | offer/acceptance not established, or acceptance mismatched, or later authenticated contradiction |
 | `AMBIGUOUS` | evidence too ambiguous to decide (e.g. acceptance may respond to different terms) |
 | `INSUFFICIENT_EVIDENCE` | deterministic gate fired (no authentic records / single participant) or ungrounded citations or failed adjudication — **fail-closed** |
+| `NON_AUTHORITATIVE` (gendid/1.2) | the snapshot is not the jointly-signed authoritative transcript — manifest signatures missing/invalid, or the room was already sealed by a different snapshot; **the LLM never runs** |
+
+**4. Snapshot authority (gendid/1.2).** The caller of `submit_evidence`
+chooses which records to submit — per-record signatures alone cannot prove
+the package is the complete room history (omit the cancellation, submit
+only the favorable subset). GenDid therefore derives a canonical
+**transcript manifest** (room, record count, ordered ids, per-record
+digests, participants, commitment) and requires **every participant** to
+Ed25519-sign that exact manifest string with the key that signed their
+records. Omission, insertion, reordering, text/attribution changes, or a
+conflicting snapshot each change the manifest and invalidate the
+signatures — the submission is recorded `NON_AUTHORITATIVE` and the
+adjudication never runs. The first authoritative finalization seals the
+room on-chain; competing snapshots of the same room are deterministically
+rejected. Regression suite: `tests/direct/test_authority.py` (23 tests,
+Steward cases A–I). Full model: [docs/PROTOCOL.md §3.4](docs/PROTOCOL.md).
 
 ## Verified live results
 
@@ -191,25 +209,30 @@ contracts, not to read or to write agreements on StudioNet (no gas charge).
 ### Tests
 
 ```bash
-# 50 direct contract tests (gltest direct mode; mocks the LLM, real crypto)
+# 73 direct contract tests (gltest direct mode; mocks the LLM, real crypto)
 #   20 adjudication + 16 adversarial Ed25519 + 10 transcript-order binding
+#   + 23 snapshot-authority (omission/insertion/reorder/collision/nonce/
+#     conflict/unsigned/attack/forged-manifest/invariants)
 pytest tests/direct/ -q
 
-# 48 JS/Python parity checks (browser lib vs contract canonicalization)
-#   25 targeted parity checks + 23-fixture dual-runner corpus
+# 61 JS/Python parity checks (browser lib vs contract canonicalization)
+#   targeted parity + 23-fixture dual-runner corpus
 #   (valid, unsigned, malformed, every reject reason, attack material,
 #    permutations — full-output byte-equality per fixture)
+#   + manifest derivation/manifestStr/manifest-signature parity
 node tests/js/test-parity.mjs
 
 # Steward attack reproducer (identity-point key + zero-scalar signature,
-# all 8 torsion points, arbitrary message) — all must print REJECTED
+# all 8 torsion points, arbitrary message; gendid/1.2 snapshot-authority
+# attacks: subset/insertion/wrong-key/zero-scalar manifest) — all rejected
 python3 scripts/attack_repro.py contracts/gendid_judge.py
 ```
 
-Requirements: Python 3.12+, `pytest`, `gltest`, `cryptography` (test only),
-Node 22+ for parity tests. The vendored contract verifier and the browser
-tweetnacl verifier must accept the same signatures and reject the same
-forgeries — that equivalence is what the parity suite and corpus pin.
+Exact runtimes and pinned versions: [docs/REPRODUCIBILITY.md](docs/REPRODUCIBILITY.md).
+Requirements: Python 3.12+ (`pip install -r requirements-test.txt`), Node 22+
+for parity tests. The vendored contract verifier and the browser tweetnacl
+verifier must accept the same signatures and reject the same forgeries —
+that equivalence is what the parity suite and corpus pin.
 
 ### Reproduce the demo
 
@@ -235,14 +258,16 @@ frontend/                     zero-backend static dApp
   lib/genlayer-sdk.bundle.js  GenLayer browser SDK (vendored)
   contract-address.js         pinned StudioNet contract address
   demos.js                    the three demo scenarios (public demo seeds)
-docs/PROTOCOL.md              protocol specification (gendid/1.1)
+docs/PROTOCOL.md              protocol specification (gendid/1.2)
 docs/SECURITY.md              security model + steward-fix → test map
+docs/REPRODUCIBILITY.md       pinned runtimes + exact reproduction commands
 docs/LIVE_DEPLOYMENT.md       verified live deployment record
 scripts/deploy_smoke.py       deployment + live smoke test harness
 scripts/error_probes.py       live error-path probes
 scripts/attack_repro.py       Steward-finding attack reproducer
-tests/direct/                 50 direct-mode contract tests
-tests/js/                     48 JS/Python parity checks incl. 23-fixture corpus
+scripts/e2e_browser_live.py   browser E2E vs the deployed contract
+tests/direct/                 73 direct-mode contract tests (incl. 23 authority)
+tests/js/                     61 JS/Python parity checks incl. 23-fixture corpus
 ```
 
 ## Security notes

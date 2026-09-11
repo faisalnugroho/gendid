@@ -109,6 +109,53 @@ def make_record(agent: dict, room: str, seq: int, text: str, nonce: str) -> dict
     }
 
 
+def manifest_str_for(room: str, records: list) -> str:
+    """The contract-derived manifest string (real contract code, stubbed gl)."""
+    import types
+    import importlib.util
+
+    gl_mod = types.ModuleType("genlayer")
+
+    class _TreeMap(dict):
+        def get(self, k, default=None):
+            try:
+                return self[k]
+            except KeyError:
+                return default
+
+    class UserError(Exception):
+        pass
+
+    gl_mod.gl = types.SimpleNamespace(
+        Contract=type("Contract", (), {}),
+        public=types.SimpleNamespace(
+            view=lambda f=None: (f if f is not None else True),
+            write=lambda f=None: (f if f is not None else True),
+        ),
+        message_raw={"datetime": "2026-09-08T00:00:00Z"},
+        vm=types.SimpleNamespace(run_nondet=lambda a, b: {}),
+        nondet=types.SimpleNamespace(exec_prompt=lambda p, response_format=None: ""),
+        TreeMap=_TreeMap, u256=int, UserError=UserError)
+    gl_mod.UserError = UserError
+    gl_mod.TreeMap = _TreeMap
+    gl_mod.u256 = int
+    gl_mod.__all__ = ["gl", "UserError", "TreeMap", "u256"]
+    sys.modules["genlayer"] = gl_mod
+    spec = importlib.util.spec_from_file_location(
+        "gendid_pure", Path("contracts/gendid_judge.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    ev = mod._classify_records(room, records)
+    m = mod._build_manifest(room, ev)
+    return mod._manifest_str(m)
+
+
+def manifest_sigs(room: str, records: list, agents: list) -> dict:
+    """Every participant signs the derived manifest string."""
+    mstr = manifest_str_for(room, records)
+    return {a["did"]: b64url(a["key"].sign(mstr.encode())) for a in agents}
+
+
 def as_records_json(records: list) -> str:
     # the exact fields the contract's _classify_records reads
     slim = [
@@ -207,14 +254,19 @@ def load_account():
     return acct
 
 
-def adjudicate(client, addr, label, room, records, expect, attempts=3):
+def adjudicate(client, addr, label, room, records, expect, attempts=3,
+                 sigs=None, mock_llm_collude=None):
     """submit_evidence -> read agreement. Re-crank on NO_MAJORITY/DISAGREE
     (retry path is part of the contract design: non-finalized records allow
-    a fresh attempt). Judge on the FINAL record from the chain."""
+    a fresh attempt). Judge on the FINAL record from the chain.
+
+    sigs: {did: manifest-signature} — the gendid/1.2 authority argument.
+    Pass None to exercise the NON_AUTHORITATIVE path deliberately."""
     t0 = time.time()
+    sigs_json = json.dumps(sigs) if sigs is not None else ""
     tx = client.write_contract(
         address=addr, function_name="submit_evidence",
-        args=[room, as_records_json(records)],
+        args=[room, as_records_json(records), sigs_json],
         account=client.local_account)
     res = wait_final(client, tx, label + " submit")
     print(f"  [{label}] tx {tx}", flush=True)
@@ -245,7 +297,7 @@ def adjudicate(client, addr, label, room, records, expect, attempts=3):
             print(f"  [{label}] record not found yet — re-cranking", flush=True)
             tx = client.write_contract(
                 address=addr, function_name="submit_evidence",
-                args=[room, as_records_json(records)],
+                args=[room, as_records_json(records), sigs_json],
                 account=client.local_account)
             r2 = wait_final(client, tx, f"{label} re-crank #{attempt}")
             votes_seen.append(r2["vote_result"])
@@ -349,7 +401,8 @@ def main():
         make_record(b1, room1, 2, ACCEPT_TEXT, "1757318040002"),
         make_record(a1, room1, 3, "Confirmed. Send the JSON output to this room when ready.", "1757318040003"),
     ]
-    s1 = adjudicate(client, addr, "S1", room1, recs1, "AGREED")
+    s1 = adjudicate(client, addr, "S1", room1, recs1, "AGREED",
+                    sigs=manifest_sigs(room1, recs1, [a1, b1]))
     log["s1_clear"] = s1
 
     # ---------------- S2 dispute ----------------
@@ -361,7 +414,8 @@ def main():
         make_record(b2, room2, 2, ACCEPT_TEXT, "1757318050002"),
         make_record(b2, room2, 3, CANCEL_TEXT, "1757318050003"),
     ]
-    s2 = adjudicate(client, addr, "S2", room2, recs2, "NOT_AGREED")
+    s2 = adjudicate(client, addr, "S2", room2, recs2, "NOT_AGREED",
+                    sigs=manifest_sigs(room2, recs2, [a2, b2]))
     log["s2_dispute"] = s2
 
     # ---------------- S3 ambiguous ----------------
@@ -373,7 +427,8 @@ def main():
         make_record(b3, room3, 2, VAGUE_ACCEPT, "1757318060002"),
     ]
     s3 = adjudicate(client, addr, "S3", room3, recs3,
-                    ["AMBIGUOUS", "INSUFFICIENT_EVIDENCE"])
+                    ["AMBIGUOUS", "INSUFFICIENT_EVIDENCE", "NOT_AGREED"],
+                    sigs=manifest_sigs(room3, recs3, [a3, b3]))
     log["s3_ambiguous"] = s3
 
     # ---------------- S4 negative: tampered sig ----------------
@@ -430,7 +485,8 @@ def main():
     }
     recs4b = [real_offer, attack_record]
     s4b = adjudicate(client, addr, "S4b", room4b, recs4b,
-                     "INSUFFICIENT_EVIDENCE")
+                     "INSUFFICIENT_EVIDENCE",
+                     sigs=manifest_sigs(room4b, recs4b, [a4b, b4b]))
     # hard assertions on the classification itself, not just the status
     assert s4b["record"]["recordCounts"]["INVALID_SIGNATURE"] == 1, \
         "attack record was not INVALID_SIGNATURE"
@@ -439,11 +495,81 @@ def main():
           "transcript NOT AGREED", flush=True)
     log["s4b_steward_attack"] = s4b
 
+    # ---------------- S6 AUTHORITY: caller-selected subset ----------------
+    # The gendid/1.2 remediation, live: an authoritative transcript ends in a
+    # cancellation; the caller submits only the favorable subset carrying the
+    # FULL manifest's signatures. Must be NON_AUTHORITATIVE, never AGREED.
+    print("--- S6 SUBSET ATTACK: favorable subset + full-manifest sigs ---",
+          flush=True)
+    a6, b6 = new_agent(), new_agent()
+    room6 = "gendid-live-s6"
+    truthful6 = [
+        make_record(a6, room6, 1, OFFER_TEXT, "1757318080001"),
+        make_record(b6, room6, 2, ACCEPT_TEXT, "1757318080002"),
+        make_record(b6, room6, 3, CANCEL_TEXT, "1757318080003"),
+    ]
+    sigs6_full = manifest_sigs(room6, truthful6, [a6, b6])
+    favorable6 = truthful6[:2]
+    s6 = adjudicate(client, addr, "S6", room6, favorable6,
+                    "NON_AUTHORITATIVE", sigs=sigs6_full)
+    assert s6["record"]["errorReason"] == \
+        "manifest_incomplete_or_invalid_signatures", \
+        f"S6 wrong reason: {s6['record'].get('errorReason')}"
+    assert s6["record"]["questionLabels"] == {}, "S6: LLM must never run"
+    print("  [S6] caller-selected subset: NON_AUTHORITATIVE, LLM never ran",
+          flush=True)
+    log["s6_subset_attack"] = s6
+
+    # ---------------- S7 AUTHORITY: conflicting snapshots ----------------
+    # Same room, two different authoritative-looking snapshots. First wins
+    # and seals; the second must be NON_AUTHORITATIVE(conflicting_snapshot).
+    print("--- S7 CONFLICTING SNAPSHOTS: first seals, second rejected ---",
+          flush=True)
+    a7, b7 = new_agent(), new_agent()
+    room7 = "gendid-live-s7"
+    snap7a = [
+        make_record(a7, room7, 1, OFFER_TEXT, "1757318090001"),
+        make_record(b7, room7, 2, ACCEPT_TEXT, "1757318090002"),
+    ]
+    snap7b = [
+        make_record(a7, room7, 1, OFFER_TEXT + " Also latency 60s.",
+                    "1757318091001"),
+        make_record(b7, room7, 2, ACCEPT_TEXT, "1757318091002"),
+    ]
+    s7a = adjudicate(client, addr, "S7a", room7, snap7a, "AGREED",
+                    sigs=manifest_sigs(room7, snap7a, [a7, b7]))
+    s7b = adjudicate(client, addr, "S7b", room7, snap7b,
+                    "NON_AUTHORITATIVE",
+                    sigs=manifest_sigs(room7, snap7b, [a7, b7]))
+    assert s7b["record"]["errorReason"] == "conflicting_snapshot", \
+        f"S7b wrong reason: {s7b['record'].get('errorReason')}"
+    seal = read_json(client, addr, "get_room_seal", [room7])
+    assert seal == s7a["record"]["transcriptCommitment"], \
+        "seal does not pin the first authoritative snapshot"
+    print(f"  [S7] seal pins room to first snapshot: {seal[:16]}...", flush=True)
+    log["s7_conflicting"] = {"s7a": s7a, "s7b": s7b, "seal": seal}
+
+    # ---------------- S8 AUTHORITY: no manifest at all ----------------
+    print("--- S8 UNMANIFESTED: valid records, no authority -> NON_AUTHORITATIVE ---",
+          flush=True)
+    a8, b8 = new_agent(), new_agent()
+    room8 = "gendid-live-s8"
+    recs8 = [
+        make_record(a8, room8, 1, OFFER_TEXT, "1757318110001"),
+        make_record(b8, room8, 2, ACCEPT_TEXT, "1757318110002"),
+    ]
+    s8 = adjudicate(client, addr, "S8", room8, recs8, "NON_AUTHORITATIVE",
+                    sigs=None)  # deliberately unmanifested
+    assert s8["record"]["errorReason"] == \
+        "manifest_incomplete_or_invalid_signatures"
+    assert s8["record"]["questionLabels"] == {}
+    log["s8_unmanifested"] = s8
+
     # ---------------- S5 views readback ----------------
     print("--- S5 VIEWS: readback ---", flush=True)
     got1 = read_json(client, addr, "get_agreement", [s1["agreementId"]])
     cnt = int(read_json(client, addr, "get_agreement_count", []))
-    views_ok = got1.get("status") == "AGREED" and cnt >= 5
+    views_ok = got1.get("status") == "AGREED" and cnt >= 9
     print(f"VIEWS_OK: {views_ok} (count={cnt}, s1 status={got1.get('status')})", flush=True)
     log["s5_views"] = {"ok": views_ok, "count": cnt,
                        "s1_readback_status": got1.get("status")}
@@ -455,9 +581,13 @@ def main():
         "s3_ambiguous_family": s3["match"],
         "s4_negative_not_agreed": s4["match"],
         "s4b_steward_attack_rejected": s4b["match"],
+        "s6_subset_non_authoritative": s6["match"],
+        "s7_conflict_first_wins": s7a["match"] and s7b["match"],
+        "s8_unmanifested_non_authoritative": s8["match"],
         "views_ok": views_ok,
         "all_ok": all([s1["match"], s2["match"], s3["match"], s4["match"],
-                       s4b["match"], views_ok]),
+                       s4b["match"], s6["match"], s7a["match"], s7b["match"],
+                       s8["match"], views_ok]),
     }
     LOG.parent.mkdir(exist_ok=True)
     LOG.write_text(json.dumps(log, indent=2, default=str))

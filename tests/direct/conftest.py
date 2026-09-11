@@ -58,6 +58,112 @@ def sign_say(agent: dict, room: str, nonce: str, swept_text: str) -> str:
     return b64url(agent["key"].sign(msg.encode()))
 
 
+def manifest_sig(agent: dict, manifest_str_: str) -> str:
+    """Agent's Ed25519 signature over the exact manifest string."""
+    return b64url(agent["key"].sign(manifest_str_.encode()))
+
+
+def manifest_str_for(room: str, records: list) -> str:
+    """The contract-derived manifest string for a record list (pure path)."""
+    mod = _load_pure_contract()
+    evidence = mod._classify_records(room, records)
+    manifest = mod._build_manifest(room, evidence)
+    return mod._manifest_str(manifest)
+
+
+def keys_to_agents(*keys) -> list:
+    """Convert Ed25519PrivateKey objects to conftest agent dicts."""
+    out = []
+    for k in keys:
+        out.append({
+            "key": k,
+            "did": did_of(k),
+        })
+    return out
+
+
+def _load_pure_contract():
+    """Load the real contract module with a stubbed genlayer (pure functions).
+
+    Reuses the gltest-loaded module when present (tests already deployed),
+    so the manifest we sign is derived by the same code the contract runs.
+    """
+    import sys
+
+    mod = sys.modules.get("_contract_gendid_judge")
+    if mod is not None:
+        return mod
+    import importlib.util
+    import types
+
+    gl_mod = types.ModuleType("genlayer")
+
+    class _TreeMap(dict):
+        def get(self, k, default=None):
+            try:
+                return self[k]
+            except KeyError:
+                return default
+
+    class UserError(Exception):
+        pass
+
+    gl_mod.gl = types.SimpleNamespace(
+        Contract=type("Contract", (), {}),
+        public=types.SimpleNamespace(
+            view=lambda f=None: (f if f is not None else True),
+            write=lambda f=None: (f if f is not None else True),
+        ),
+        message_raw={"datetime": "2026-09-08T00:00:00Z"},
+        vm=types.SimpleNamespace(run_nondet=lambda a, b: {}),
+        nondet=types.SimpleNamespace(exec_prompt=lambda p, response_format=None: ""),
+        TreeMap=_TreeMap,
+        u256=int,
+        UserError=UserError,
+    )
+    gl_mod.UserError = UserError
+    gl_mod.TreeMap = _TreeMap
+    gl_mod.u256 = int
+    gl_mod.__all__ = ["gl", "UserError", "TreeMap", "u256"]
+    sys.modules["genlayer"] = gl_mod
+    spec = importlib.util.spec_from_file_location(
+        "gendid_pure", str(_CONTRACT))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def build_manifest_sig(room: str, records: list, agents) -> dict:
+    """Compute the contract's derived manifest for `records` (via the real
+    contract code) and sign it with every listed agent. `agents` may be a
+    dict (any keys) or an iterable of agent dicts / Ed25519PrivateKey; matching
+    to participants is by the agent's DID. Returns
+    {senderDid: signature} — the third submit_evidence argument."""
+    mod = _load_pure_contract()
+    evidence = mod._classify_records(room, records)
+    manifest = mod._build_manifest(room, evidence)
+    mstr = mod._manifest_str(manifest)
+    if isinstance(agents, dict):
+        agent_list = list(agents.values())
+    else:
+        agent_list = list(agents)
+    # normalize raw keys to agent dicts
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+    )
+
+    norm = []
+    for a in agent_list:
+        if isinstance(a, Ed25519PrivateKey):
+            a = {"key": a, "did": did_of(a)}
+        norm.append(a)
+    return {
+        a["did"]: manifest_sig(a, mstr)
+        for a in norm
+        if a["did"] in evidence["participants"]
+    }
+
+
 def tc_sweep_py(text: str) -> str:
     import unicodedata
 
@@ -110,6 +216,14 @@ def as_records_json(records: list) -> str:
     return json.dumps(records)
 
 
+def submit(contract, room, recs, sigs=None):
+    """Submit with manifest signatures (None = '' third arg, exercises the
+    NON_AUTHORITATIVE path for tests that don't care)."""
+    recs_json = as_records_json(recs)
+    sigs_json = json.dumps(sigs) if sigs is not None else ""
+    return contract.submit_evidence(room, recs_json, sigs_json)
+
+
 def deploy(vm):
     from gltest.direct import create_address, deploy_contract
 
@@ -119,6 +233,8 @@ def deploy(vm):
 
 def llm_answer(labels=None, terms=None, offer=None, acceptance=None):
     """A well-formed LLM answer for mock_llm."""
+    offer = offer or "gdr-gendid-demo-01-1"
+    acceptance = acceptance or "gdr-gendid-demo-01-2"
     base = {
         "two_or_more_participants": "PASS",
         "offer_present": "PASS",
@@ -131,11 +247,11 @@ def llm_answer(labels=None, terms=None, offer=None, acceptance=None):
             {
                 "key": "task",
                 "value": "data normalization",
-                "recordId": "gdr-gendid-demo-01-1",
+                "recordId": offer,
             }
         ],
-        "offerRecordId": offer or "gdr-gendid-demo-01-1",
-        "acceptanceRecordId": acceptance or "gdr-gendid-demo-01-2",
+        "offerRecordId": offer,
+        "acceptanceRecordId": acceptance,
         "contradictionRecordIds": [],
         "reasoning": "authentic offer + acceptance",
     }

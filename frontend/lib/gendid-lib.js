@@ -537,7 +537,7 @@ async function sha256Hex(str) {
 async function buildEvidencePackage(room, rawRecords) {
   const cls = await classifyTranscript(room, rawRecords);
   const package_ = {
-    protocolVersion: "gendid/1.1",
+    protocolVersion: "gendid/1.2",
     transcriptRoom: room,
     transcriptCommitment: cls.transcriptCommitment,
     records: cls.records,
@@ -545,6 +545,94 @@ async function buildEvidencePackage(room, rawRecords) {
   const evidenceHash = await sha256Hex(canonicalJson(package_));
   const agreementId = `GD-${room.slice(0, 24)}-${evidenceHash.slice(0, 16)}`;
   return { ...cls, package: package_, evidenceHash, agreementId };
+}
+
+// ============================== transcript manifest (gendid/1.2) ==============================
+// MIRRORS contracts/gendid_judge.py _build_manifest / _manifest_str /
+// _record_digest EXACTLY — byte-parity enforced by the parity corpus.
+// The manifest is DERIVED from the authenticated record set (never
+// caller-supplied) and binds: room, record count, ordered record ids,
+// per-record content digests, participant set, transcript commitment.
+
+async function recordDigest(record) {
+  const CORE_KEYS = ["recordId", "room", "sequence", "senderDid", "nonce", "signature", "text"];
+  const core = {};
+  for (const k of CORE_KEYS) if (k in record) core[k] = record[k];
+  return sha256Hex(canonicalJson(core));
+}
+
+async function buildManifest(room, cls) {
+  // cls = output of classifyTranscript (or buildEvidencePackage, which
+  // spreads it). Ordered AUTHENTIC records only, canonical order.
+  const orderedAuth = cls.records.filter((r) => r.signatureStatus === "AUTHENTIC_SIGNED");
+  const digests = [];
+  for (const r of orderedAuth) digests.push(await recordDigest(r));
+  return {
+    protocolVersion: "gendid/1.2",
+    room,
+    recordCount: orderedAuth.length,
+    recordIds: orderedAuth.map((r) => r.recordId),
+    recordDigests: digests,
+    participants: cls.participants, // already sorted
+    transcriptCommitment: cls.transcriptCommitment,
+  };
+}
+
+function manifestStr(manifest) {
+  return `${manifest.room}|${manifest.recordCount}|${manifest.recordIds.join(",")}|${manifest.participants.join(",")}|${manifest.transcriptCommitment}`;
+}
+
+async function signManifest(identity, room, cls) {
+  // Signs the DERIVED manifest for the classified transcript with the
+  // browser identity's key — the same key/algorithm as record signing
+  // (nacl.sign.detached over the exact manifestStr bytes).
+  const manifest = await buildManifest(room, cls);
+  const mstr = manifestStr(manifest);
+  const sig = nacl.sign.detached(new TextEncoder().encode(mstr), identity.kp.secretKey);
+  return { did: identity.did, signature: b64url(sig), manifest, manifestStr: mstr };
+}
+
+// Verify a manifest signature set against a classified transcript —
+// mirrors the contract's _verify_authority (same checks, same reasons).
+// NOTE: full strict checks (small-order, canonical encodings) are already
+// enforced by classifyTranscript on the RECORDS; the manifest signature
+// itself is verified with nacl; the strict reject layer applies at the
+// contract identically for records and manifests.
+async function verifyAuthority(cls, manifestSigs) {
+  const room = cls.records.length ? cls.records[0].room : "";
+  const manifest = await buildManifest(room, cls);
+  const mstr = manifestStr(manifest);
+  const out = { ok: false, reason: "", missing: [], verified: [] };
+  if (!manifestSigs || typeof manifestSigs !== "object") {
+    out.reason = "manifest_signatures_not_object";
+    return out;
+  }
+  const missing = [];
+  const verified = [];
+  for (const did of cls.participants) {
+    const sig = manifestSigs[did];
+    if (!sig || typeof sig !== "string") { missing.push(did); continue; }
+    const sigBytes = b64urlDecode(sig);
+    if (!sigBytes || sigBytes.length !== 64) { missing.push(did); continue; }
+    if (b64url(sigBytes) !== sig) { missing.push(did); continue; }
+    const pub = pubkeyFromDid(did);
+    if (!pub) { out.reason = "manifest_signer_did_undecodable"; out.missing = missing; return out; }
+    // strict reject layer for the manifest signature (mirrors contract order)
+    const reason = strictRejectReason(pub, sigBytes);
+    if (reason) { out.reason = "manifest_signature_" + reason.replace(/ /g, "_"); out.missing = missing; return out; }
+    const ok = nacl.sign.detached.verify(new TextEncoder().encode(mstr), sigBytes, pub);
+    if (!ok) { missing.push(did); continue; }
+    verified.push(did);
+  }
+  if (missing.length) {
+    out.reason = "manifest_incomplete_or_invalid_signatures";
+    out.missing = missing;
+    out.verified = verified;
+    return out;
+  }
+  out.ok = true;
+  out.verified = verified;
+  return out;
 }
 
 // tclk/1 frame recognition (display only)
@@ -655,6 +743,8 @@ window.GD = {
   verifyRecord, classifyTranscript, isCanonicalSeq,
   // evidence
   canonicalJson, sha256Hex, buildEvidencePackage, tclkTag,
+  // manifest authority (gendid/1.2)
+  recordDigest, buildManifest, manifestStr, signManifest, verifyAuthority,
   // technocore
   tcReadRoom, tcSaySigned, tcSayUnsigned, TC_BASE,
   // helpers

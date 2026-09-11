@@ -16,6 +16,7 @@
     room: "gendid-demo-01",  // current transcript room
     rawRecords: [],           // canonical raw records loaded
     sourceLabel: "",         // how they were loaded ("demo A", "paste", "room x")
+    demoKey: null,           // active demo key (for manifest signing)
     verified: null,          // result of buildEvidencePackage
     judging: false,
     lastResult: null,        // {record, txHash, mode, labels, candidate, why}
@@ -184,6 +185,7 @@
 
   function runDemo(demoKey) {
     try {
+      state.demoKey = demoKey;
       var recs = buildDemo(demoKey);
       loadRecords(recs, window.GENDID_DEMOS[demoKey].room, "demo " + demoKey);
       // select the matching card
@@ -302,22 +304,66 @@
       }
       var clean = state.rawRecords.filter(function (r) { return !r.malformed; });
       GD.buildEvidencePackage(state.room, clean).then(function (ev) {
-        state.verified = ev;
-        renderVerified();
-        renderRecords(); // re-render with statuses
-        $("sec-analyze").hidden = false;
-        // reveal the adjudication panel so the user can actually click
-        // Judge — previously the ONLY code unhiding #sec-adjudicate was
-        // judgeAgreement() itself, whose trigger button lives INSIDE the
-        // hidden section (unclickable). Found during the Sep 2026
-        // steward-hardening live E2E.
-        $("sec-adjudicate").hidden = false;
-        renderCandidate();
-        toast("Verified: " + ev.counts.AUTHENTIC_SIGNED + " authentic · " + ev.counts.UNSIGNED + " unsigned · " + (ev.counts.INVALID_SIGNATURE + ev.counts.MALFORMED) + " rejected.");
+        return GD.buildManifest(state.room, ev).then(function (manifest) {
+          var mstr = GD.manifestStr(manifest);
+          // Sign the manifest with every participant identity we hold in
+          // this browser (demo identities are deterministic from seeds; a
+          // user pasting a transcript needs each participant's manifest
+          // signature supplied alongside, or the contract marks it
+          // NON_AUTHORITATIVE — by design).
+          var sigs = {};
+          var tasks = [];
+          var demoSeeds = null;
+          try {
+            var dk = state.demoKey || (state.sourceLabel || "").replace("demo ", "");
+            if (window.GENDID_DEMOS && window.GENDID_DEMOS[dk]) {
+              demoSeeds = window.GENDID_DEMOS[dk];
+            }
+          } catch (e) { /* no demos */ }
+          if (demoSeeds) {
+            ["a", "b", "n"].forEach(function (w) {
+              var seedHex = w === "a" ? demoSeeds.seedA : w === "b" ? demoSeeds.seedB : demoSeeds.seedN;
+              if (!seedHex) return;
+              var id = GD.identityFromSeed(seedHex);
+              if (manifest.participants.indexOf(id.did) >= 0) {
+                tasks.push(
+                  Promise.resolve(nacl_sign_manifest(id, mstr)).then(function (r) { sigs[r.did] = r.sig; })
+                );
+              }
+            });
+          }
+          return Promise.all(tasks).then(function () {
+            state.verified = ev;
+            state.verified.manifest = manifest;
+            state.verified.manifestStr = mstr;
+            state.verified.manifestSigs = sigs;
+            renderVerified();
+            renderRecords(); // re-render with statuses
+            $("sec-analyze").hidden = false;
+            // reveal the adjudication panel so the user can actually click
+            // Judge — previously the ONLY code unhiding #sec-adjudicate was
+            // judgeAgreement() itself, whose trigger button lives INSIDE the
+            // hidden section (unclickable). Found during the Sep 2026
+            // steward-hardening live E2E.
+            $("sec-adjudicate").hidden = false;
+            renderCandidate();
+            var nAuth = ev.counts.AUTHENTIC_SIGNED;
+            var nSig = Object.keys(sigs).length;
+            toast("Verified: " + nAuth + " authentic · " + nSig + "/" + manifest.participants.length +
+              " manifest signatures" + (nSig < manifest.participants.length ? " — incomplete authority (will be NON_AUTHORITATIVE)" : " — authority OK"));
+          });
+        });
       });
     } catch (e) {
       toast(clip(e.message) || "Verification failed", true);
     }
+  }
+
+  function nacl_sign_manifest(identity, mstr) {
+    // detached Ed25519 over the exact manifestStr bytes — same signer as
+    // records (mirrors GD.signSay's use of nacl.sign.detached).
+    var sig = nacl.sign.detached(new TextEncoder().encode(mstr), identity.kp.secretKey);
+    return { did: identity.did, sig: GD.b64url(sig) };
   }
 
   function renderVerified() {
@@ -594,9 +640,11 @@
           nonce: r.nonce, signature: r.signature, text: r.text,
         };
       }));
+      var sigs = {};
+      if (state.verified.manifestSigs) sigs = state.verified.manifestSigs;
       var txHash = await client.writeContract({
         address: CONTRACT, functionName: "submit_evidence",
-        args: [state.room, recordsJson], account: w.account,
+        args: [state.room, recordsJson, JSON.stringify(sigs)], account: w.account,
       });
       pipeStep("submit", "done", "Tx <a href=\"" + EXPLORER_TX + txHash + "\" target=\"_blank\" rel=\"noopener\">" + esc(txHash.slice(0, 18)) + "…</a> submitted — awaiting consensus…");
       pipeStep("adj", "active", "Leader proposing · validators re-running independently…");
@@ -672,7 +720,7 @@
     // result banner
     var banner = $("result");
     banner.classList.remove("hidden", "ok", "no", "amb", "ins");
-    var clsBy = { AGREED: "ok", NOT_AGREED: "no", AMBIGUOUS: "amb", INSUFFICIENT_EVIDENCE: "ins" };
+    var clsBy = { AGREED: "ok", NOT_AGREED: "no", AMBIGUOUS: "amb", INSUFFICIENT_EVIDENCE: "ins", NON_AUTHORITATIVE: "ins" };
     banner.classList.add(clsBy[res.status] || "ins");
     $("result-status").textContent = res.status;
     $("result-sub").textContent = res.summary;
@@ -746,7 +794,7 @@
     $("sec-receipt").hidden = false;
     var v = state.verified;
     var pill = $("receipt-status-pill");
-    var pillCls = { AGREED: "ok", NOT_AGREED: "bad", AMBIGUOUS: "warn", INSUFFICIENT_EVIDENCE: "mute" }[res.status] || "mute";
+    var pillCls = { AGREED: "ok", NOT_AGREED: "bad", AMBIGUOUS: "warn", INSUFFICIENT_EVIDENCE: "mute", NON_AUTHORITATIVE: "bad" }[res.status] || "mute";
     pill.className = "pill " + pillCls;
     pill.textContent = res.status;
 

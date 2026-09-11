@@ -20,7 +20,7 @@ import json
 import pytest
 
 import steward_fixtures as FX
-from conftest import deploy, mock_llm_ok, as_records_json
+from conftest import deploy, mock_llm_ok, as_records_json, submit, build_manifest_sig
 
 ROOM = "gendid-demo-01"
 
@@ -43,7 +43,7 @@ def classify(direct_vm, recs, room=ROOM):
     need MULTIPLE transcripts must use classify_all (single contract, N
     submits) instead of calling classify repeatedly."""
     contract = deploy(direct_vm)
-    aid = contract.submit_evidence(room, as_records_json(recs))
+    aid = submit(contract, room, recs)
     return json.loads(contract.get_agreement(aid))
 
 
@@ -53,7 +53,7 @@ def classify_all(direct_vm, transcripts, room=ROOM):
     contract = deploy(direct_vm)
     outs = []
     for recs in transcripts:
-        aid = contract.submit_evidence(room, as_records_json(recs))
+        aid = submit(contract, room, recs)
         outs.append(json.loads(contract.get_agreement(aid)))
     return outs
 
@@ -168,7 +168,8 @@ def test_o8_commitment_in_prompt(direct_vm):
     ka, kb = _agents()
     t = [FX.real_record(ka, ROOM, 1, FX.OFFER_TEXT, "1001"),
          FX.real_record(kb, ROOM, 2, FX.ACCEPT_TEXT, "1002")]
-    aid = contract.submit_evidence(ROOM, as_records_json(t))
+    sigs = build_manifest_sig(ROOM, t, [ka, kb])
+    aid = submit(contract, ROOM, t, sigs=sigs)
     direct_vm._match_llm_mock = orig
     assert seen, "LLM never saw a prompt"
     prompt = seen[0] if isinstance(seen[0], str) else seen[0][0]

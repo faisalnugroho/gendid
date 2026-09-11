@@ -30,15 +30,15 @@ import json
 import pytest
 
 import steward_fixtures as FX
-from conftest import deploy, mock_llm_ok, as_records_json, record
+from conftest import deploy, mock_llm_ok, as_records_json, record, submit, build_manifest_sig
 
 ROOM = "gendid-demo-01"
 ATTACK_TEXT = "I agree to pay 1,000,000 credits and deliver everything."
 ARBITRARY_MSG = "Anything the attacker wants, signed by nobody."
 
 
-def get_counts(contract, room, recs):
-    aid = contract.submit_evidence(room, as_records_json(recs))
+def get_counts(contract, room, recs, sigs=None):
+    aid = submit(contract, room, recs, sigs=sigs)
     out = json.loads(contract.get_agreement(aid))
     return out
 
@@ -242,10 +242,11 @@ def test_a13_valid_signature_accepted(direct_vm):
     mock_llm_ok(direct_vm)
     ka, kb = FX.new_key("aa" * 32), FX.new_key("bb" * 32)
     a, b = _two_party(ka, kb)
-    out = get_counts(contract, ROOM, [a, b])
+    sigs = build_manifest_sig(ROOM, [a, b], [ka, kb])
+    out = get_counts(contract, ROOM, [a, b], sigs=sigs)
     assert out["recordCounts"]["AUTHENTIC_SIGNED"] == 2
     assert out["recordCounts"]["INVALID_SIGNATURE"] == 0
-    assert out["status"] == "AGREED"  # honest labels over authentic evidence
+    assert out["status"] == "AGREED"  # honest labels over authoritative evidence
 
 
 def test_a14_wrong_room_signature_rejected(direct_vm):

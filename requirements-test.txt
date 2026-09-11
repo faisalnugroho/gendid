@@ -1,0 +1,13 @@
+# GenDid test dependencies — pinned for reproducibility (docs/REPRODUCIBILITY.md).
+# The contract itself has no third-party imports (pure stdlib inside the GenVM);
+# these pins cover the TEST stack only.
+#
+# NOTE on genlayer-test: pinned to 0.29.2 — the 1.x line is a breaking rewrite
+# (different plugin surface). gltest downloads its GenVM runner at first run;
+# the runner version is pinned by the contract header
+# (py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6 -> v0.3.0-rc7)
+# and CI pre-seeds the matching tarball (see .github/workflows/tests.yml).
+genlayer-test==0.29.2
+pytest==8.3.5
+cryptography>=43.0.1,<44
+requests>=2.32.0,<3

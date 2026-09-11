@@ -49,6 +49,28 @@ def did_for_pub(pub32: bytes) -> str:
     return "did:key:z" + b58(ED_PREFIX + pub32)
 
 
+def new_key_local(seed: bytes):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+    )
+    return Ed25519PrivateKey.from_private_bytes(seed)
+
+
+def G_slim(key, seq, text, nonce):
+    pub = key.public_key().public_bytes_raw()
+    return {
+        "sequence": seq,
+        "senderDid": did_for_pub(pub),
+        "nonce": nonce,
+        "signature": b64url(key.sign(f"gendid-demo-01|{nonce}|{text}".encode())),
+        "text": text,
+    }
+
+
+def _did(key):
+    return did_for_pub(key.public_key().public_bytes_raw())
+
+
 def load_contract(path: Path):
     """Load the contract module with a stubbed genlayer (pure functions only)."""
     gl_mod = types.ModuleType("genlayer")
@@ -189,6 +211,51 @@ def main() -> int:
             f"(R=-[{cand}]A, s=0, same arbitrary message)"
         )
 
+    # --- gendid/1.2: manifest authority attacks ---------------------------
+    print("\n# gendid/1.2 snapshot-authority attacks (caller-selected subsets):")
+    ka = new_key_local(b"\xaa" * 32)
+    kb = new_key_local(b"\xbb" * 32)
+    full = [
+        G_slim(ka, 1, "Task: anything. Price 5 credits.", "1001"),
+        G_slim(kb, 2, "Accepted.", "1002"),
+        G_slim(kb, 3, "Cancel that, I withdraw.", "1003"),
+    ]
+    ev_full = G._classify_records("gendid-demo-01", full)
+    m_full = G._build_manifest("gendid-demo-01", ev_full)
+    s_full = G._manifest_str(m_full)
+    sigs_full = {
+        _did(ka): b64url(ka.sign(s_full.encode())),
+        _did(kb): b64url(kb.sign(s_full.encode())),
+    }
+    # authority over the FULL manifest: ok
+    v_ok = G._verify_authority(m_full, sigs_full, ev_full)
+    print(f"  full-manifest authority verifies      : {v_ok['ok']}")
+    # omission: submit the favorable subset with the full's signatures
+    fav = full[:2]
+    ev_fav = G._classify_records("gendid-demo-01", fav)
+    m_fav = G._build_manifest("gendid-demo-01", ev_fav)
+    v_omit = G._verify_authority(m_fav, sigs_full, ev_fav)
+    print(f"  omitted-record subset with full sigs  : ok={v_omit['ok']} "
+          f"reason={v_omit['reason']}")
+    # insertion: extra record + old signatures
+    ins = full + [G_slim(kb, 4, "Amendment.", "1004")]
+    ev_ins = G._classify_records("gendid-demo-01", ins)
+    m_ins = G._build_manifest("gendid-demo-01", ev_ins)
+    v_ins = G._verify_authority(m_ins, sigs_full, ev_ins)
+    print(f"  inserted-record set with old sigs     : ok={v_ins['ok']} "
+          f"reason={v_ins['reason']}")
+    # forged manifest sig (wrong key)
+    attacker = new_key_local(b"\xee" * 32)
+    forged = {did: b64url(attacker.sign(s_full.encode()))
+              for did in (sigs_full.keys())}
+    v_forge = G._verify_authority(m_full, forged, ev_full)
+    print(f"  wrong-key manifest signatures         : ok={v_forge['ok']} "
+          f"reason={v_forge['reason']}")
+    # zero-scalar manifest sig
+    zero = {list(sigs_full)[0]: b64url(identity_enc + b"\x00" * 32)}
+    v_zero = G._verify_authority(m_full, zero, ev_full)
+    print(f"  zero-scalar manifest signature        : ok={v_zero['ok']} "
+          f"reason={v_zero['reason']}")
     # --- two DISTINCT small-order DIDs => gate passes => forged AGREED path ---
     if forged_any >= 2:
         print("\n# two-party forged transcript (two distinct small-order DIDs):")

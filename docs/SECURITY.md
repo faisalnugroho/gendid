@@ -1,4 +1,4 @@
-# GenDid Security Model (gendid/1.1)
+# GenDid Security Model (gendid/1.2)
 
 This document maps the Sep 2026 Steward security findings to the exact
 implementation and the regression tests that prove each fix. Nothing here is
@@ -98,14 +98,85 @@ INPUT, BROWSER output, and CONTRACT output (full canonical record list,
 counts, rejections, participants, commitment, evidenceHash, agreementId)
 must be byte-identical. CI executes both runners on every push.
 
-## 6. Standing test counts (gendid/1.1)
+## 6. Transcript snapshot authority (gendid/1.2 — the second Steward finding)
+
+The second Steward concern: *the caller of `submit_evidence` chooses the
+record set*. Per-record DID signatures authenticate each record's content
+and the hash chain binds the supplied package's order — but neither proves
+the package is the COMPLETE room history rather than a caller-selected
+subset (omit the cancellation, submit only the favorable records).
+
+Fix: a **jointly-authenticated immutable transcript manifest**, derived —
+never caller-supplied — by both the contract and the browser from the
+authenticated record set:
+
+```
+manifest = {
+  protocolVersion: "gendid/1.2", room, recordCount,
+  recordIds:      [ordered ids of AUTHENTIC records],
+  recordDigests:  [sha256(canonical_json(record_core)) per record],
+  participants:  [sorted distinct senderDIDs of AUTHENTIC records],
+  transcriptCommitment: <the gendid/1.1 order chain root>
+}
+manifestStr = "<room>|<recordCount>|<recordIds joined>|<participants joined>|<transcriptCommitment>"
+```
+
+Authority = **every participant** (each distinct `senderDid`) must supply
+an Ed25519 signature over `manifestStr`, made with the same key that
+signed their records, verified through the same strict layer (§2 —
+small-order keys/R, non-canonical encodings, S≥L, S=0 all reject with
+distinct `manifest_*` reasons).
+
+Security property (exact): the manifest binds record count, ordered ids,
+per-record content digests, the participant set, and the commitment.
+Therefore:
+
+| manipulation | effect on authority |
+|---|---|
+| omit a record (CASE A) | recordCount/digest list change → old manifest signatures no longer verify → `manifest_incomplete_or_invalid_signatures` |
+| insert a record (CASE B) | same — even a genuinely signed new record changes the manifest |
+| reorder chronology (CASE C) | canonical order is (nonce, seq, id) — a different chronology is a different manifestStr |
+| change any text/nonce | record digest changes → invalid |
+| change attribution | participant set / digests change → invalid |
+| swap in another signer's key | manifest signature must come from the record-set participant's own did:key |
+| conflicting snapshots (CASE F) | first authoritative finalization seals the room on-chain (`room_seals`); any different manifest for that room → `conflicting_snapshot` |
+| no manifest at all | `NON_AUTHORITATIVE` — the LLM never runs |
+
+The status `NON_AUTHORITATIVE` is a new explicit, tested, frontend-mirrored
+state: a non-authoritative submission is *recorded* (auditability) but the
+adjudication questions are never asked — a semantic answer can never arise
+from unauthoritative evidence.
+
+Why honest parties sign: each participant's manifest signature is a fresh
+commitment that the record set they witnessed is exactly this snapshot.
+A caller without every participant's key cannot mint authority for a
+manipulated set. (In the production dApp the browser holds the demo
+identities and signs the manifest for them; for pasted third-party
+transcripts, each participant's manifest signature must be supplied —
+incomplete authority is surfaced explicitly in the UI before submission.)
+
+Adversarial regression suite: `tests/direct/test_authority.py` — 23 tests
+covering Steward cases A–I (omission, omission-of-contradiction,
+insertion, reordering, array-permutation ≠ reorder, sequence collision,
+cross-party nonce manipulation, same-DID nonce regression, conflicting
+snapshots + idempotent resubmission, unsigned insertion, attack material
+as manifest signature, forged manifest signature, prompt injection under
+authority, and invariant tests: manifest sensitivity, two conflicts never
+both authoritative, invalid signatures never enter the manifest, unsigned
+never authenticated, non-authoritative never falls through to AGREED,
+authority only after the deterministic gate).
+
+## 7. Standing test counts (gendid/1.2)
 
 - Contract + adjudication: `test_gendid_judge.py` — 20 tests
 - Adversarial Ed25519: `test_adversarial_ed25519.py` — 16 tests
-- Order binding: `test_order_binding.py` — 10 tests
-- Browser parity + corpus: `test-parity.mjs` — 25 + 23 corpus checks
-- Attack reproducer: `scripts/attack_repro.py` (identity point, all 8
-  torsion points, arbitrary message) — all REJECTED
+- Snapshot authority: `test_authority.py` — 23 tests
+- Order binding: `test_order_binding.py` — 10 tests (total direct: 73)
+- Browser parity + corpus + manifest parity: `test-parity.mjs` — 61 checks
+- Attack reproducer: `scripts/attack_repro.py` — identity point, all 8
+  torsion points, arbitrary message, AND the gendid/1.2 subset /
+  insertion / wrong-key / zero-scalar manifest attacks — all rejected
+- `genvm-lint` clean (`{"ok":true,...}`)
 
-Total: 50 direct contract tests + 48 JS checks, zero failures, plus
-`genvm-lint` clean. Exact per-test output is pasted in the steward response.
+Exact reproduction commands: `docs/REPRODUCIBILITY.md`. CI runs the same
+commands on every push.
