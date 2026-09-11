@@ -838,7 +838,7 @@
 
     // receipt JSON snapshot
     state.receiptJson = JSON.stringify({
-      protocolVersion: "gendid/1.1",
+      protocolVersion: "gendid/1.2",
       agreementId: v.agreementId,
       status: res.status,
       evidenceHash: v.evidenceHash,
