@@ -884,6 +884,7 @@
       tag.className = "mode-tag local"; tag.textContent = "LOCAL / DEMO MODE";
       note.textContent = "no contract address configured — adjudication runs the same derivation locally";
       hint.textContent = "status panel · demo mode";
+      $("gl-explain").innerHTML = "LOCAL / DEMO MODE: no contract address is configured in this install, so this run derives the status with the <b>same deterministic matrix</b> the contract uses, plus a local heuristic labeler for the semantic questions. Provide a Studionet contract address (contract-address.js) to enable live adjudication.";
     }
   }
 

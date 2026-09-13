@@ -65,10 +65,11 @@ def rpc(m, p):
 
 
 def main():
-    e2e = json.loads(Path("/tmp/phase4_e2e.json").read_text())
-    run1, run2 = e2e[0], e2e[1]
-    txs = [run1["r_tx_link"].split("/tx/")[-1], run2["r_tx_link"].split("/tx/")[-1]
-           if run2["r_tx_link"].startswith("http") else run2["r_tx_link"]]
+    src = sys.argv[1] if len(sys.argv) > 1 else "/tmp/phase4_e2e.json"
+    e2e = json.loads(Path(src).read_text())
+    runs = e2e if isinstance(e2e, list) else [e2e]
+    run1 = runs[0]
+    txs = [r["r_tx_link"].split("/tx/")[-1] for r in runs]
 
     out = {"browser_url": run1["url"], "contract": ADDR,
            "transactions": []}
@@ -156,6 +157,11 @@ def main():
     }
 
     # ---- 4. browser vs on-chain comparisons
+    tx_checks = []
+    for i, t in enumerate(out["transactions"]):
+        tx_checks.append(t["status"] == "FINALIZED"
+                         and t["result_name"] == "MAJORITY_AGREE"
+                         and t["to_address"] == ADDR)
     cmp = {
         "agreementId": rec.get("agreementId") == run1["agreementId_dom"],
         "evidenceHash": rec.get("evidenceHash") == run1["evidenceHash_dom"],
@@ -169,14 +175,7 @@ def main():
             rec.get("transcriptCommitment")
             == (rec.get("manifest", {}) or {}).get("transcriptCommitment"),
         "seal_equals_commitment": seal == rec.get("transcriptCommitment"),
-        "tx1_finalized_majority_agree":
-            out["transactions"][0]["status"] == "FINALIZED"
-            and out["transactions"][0]["result_name"] == "MAJORITY_AGREE"
-            and out["transactions"][0]["to_address"] == ADDR,
-        "tx2_finalized_majority_agree":
-            out["transactions"][1]["status"] == "FINALIZED"
-            and out["transactions"][1]["result_name"] == "MAJORITY_AGREE"
-            and out["transactions"][1]["to_address"] == ADDR,
+        "all_txs_finalized_majority_agree_to_v12_contract": all(tx_checks),
         "manifest_sigs_valid": all(v == "VALID"
                                    for v in sig_verify.values()),
         "record_sigs_valid": all(r["status"] == "VALID"

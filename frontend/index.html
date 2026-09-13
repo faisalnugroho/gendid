@@ -1,9 +1,10 @@
 <!doctype html>
 <!-- GenDid — DID Agreement Judge. Static, zero-backend frontend.
      All crypto is client-side (tweetnacl Ed25519 did:key); seeds never leave
-     this browser. GenLayer path (when a contract address is configured) runs
-     through the bundled genlayer-js SDK; without one, the panel is clearly
-     labeled LOCAL / DEMO MODE. Independent prototype — not affiliated with
+     this browser. GenLayer path runs through the bundled genlayer-js SDK;
+     production pins the Studionet contract at runtime (see
+     contract-address.js). A local install without contract-address.js runs
+     LOCAL / DEMO MODE. Independent prototype — not affiliated with
      or endorsed by FLOP Labs, Technocore, or GenLayer Labs. -->
 <html lang="en">
 <head>
@@ -375,7 +376,7 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:34px 0}
 <header class="hero">
   <div class="hero-eyebrow">
     <span class="dot" aria-hidden="true"></span>
-    <span>gendid/1 · independent prototype</span>
+    <span>gendid/1.2 · independent prototype</span>
     <span>·</span>
     <span>technocore.chat signed lane</span>
     <span>·</span>
@@ -497,7 +498,7 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:34px 0}
         <div class="counter info"><div class="n" id="c-dup">0</div><div class="l">Duplicate</div></div>
       </div>
       <div class="kv" style="margin-top:16px">
-        <span class="k">Evidence hash (sha256, gendid/1)</span>
+        <span class="k">Evidence hash (sha256, gendid/1.2)</span>
         <span class="v hashline"><code id="e-hash">—</code><button class="copybtn" data-copy="e-hash">copy</button></span>
         <span class="k">Agreement ID</span>
         <span class="v hashline"><code id="e-aid">—</code><button class="copybtn" data-copy="e-aid">copy</button></span>
@@ -543,8 +544,8 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:34px 0}
   </div>
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
-      <span class="mode-tag local" id="mode-tag">LOCAL / DEMO MODE</span>
-      <span style="font-size:11px;color:var(--faint)" id="gl-note">no contract address configured — adjudication runs the same derivation locally</span>
+      <span class="mode-tag local" id="mode-tag">LOADING — JAVASCRIPT REQUIRED</span>
+      <span style="font-size:11px;color:var(--faint)" id="gl-note">initializing…</span>
     </div>
     <button class="btn primary big" id="btn-judge" style="margin-bottom:6px">Judge Agreement</button>
     <div class="pipe hidden" id="pipe" style="margin-top:14px">
@@ -554,7 +555,7 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:34px 0}
       <div class="pipe-step" data-step="consensus"><span><span class="pt">Consensus</span><div class="pd" id="pd-consensus">—</div></span></div>
       <div class="pipe-step" data-step="final"><span><span class="pt">Final result</span><div class="pd" id="pd-final">—</div></span></div>
     </div>
-    <p class="notice" style="margin-top:14px" id="gl-explain">LOCAL / DEMO MODE: the GenLayer contract is not configured yet, so this run derives the status with the <b>same deterministic matrix</b> the contract uses, plus a local heuristic labeler for the semantic questions. When a Studionet contract address is set, this panel shows real transaction information only.</p>
+    <p class="notice" style="margin-top:14px" id="gl-explain">This dApp requires JavaScript to initialize live mode. Live mode uses GenLayer StudioNet contract 0xfb861614e3f274bc3e3253cd0857c70fc08dD4B1 (gendid/1.2).<noscript><br><b>JavaScript is disabled or blocked — the live GenLayer mode cannot start.</b> Production contract: 0xfb861614e3f274bc3e3253cd0857c70fc08dD4B1 · gendid/1.2.</noscript></p>
   </div>
 
   <!-- result -->
@@ -593,7 +594,7 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:34px 0}
       <h4>Header</h4>
       <div class="kv">
         <span class="k">Agreement ID</span><span class="v hashline"><code id="r-aid">—</code><button class="copybtn" data-copy="r-aid">copy</button></span>
-        <span class="k">Protocol</span><span class="v dim mono-s">gendid/1 · independent prototype</span>
+        <span class="k">Protocol</span><span class="v dim mono-s">gendid/1.2 · independent prototype</span>
         <span class="k">Status</span><span class="v" id="r-status">—</span>
         <span class="k">Transcript room</span><span class="v mono-s" id="r-room">—</span>
         <span class="k">Adjudication state</span><span class="v mono-s" id="r-state">—</span>
@@ -659,7 +660,7 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:34px 0}
 </section>
 
 <footer>
-  <div class="fdis"><b>GenDid — DID Agreement Judge</b> · gendid/1 · independent prototype. Not a FLOP Labs, Technocore, or GenLayer Labs project; no endorsement, partnership, or integration is claimed. DID signature verification is deterministic cryptography; GenLayer adjudicates the meaning and consistency of authenticated evidence. Not a truth oracle, not a fulfillment oracle, not a settlement protocol — no escrow, no payments, no FLOP rails. tclk frames are displayed as structured evidence only. Private keys never leave your browser.</div>
+  <div class="fdis"><b>GenDid — DID Agreement Judge</b> · gendid/1.2 · independent prototype. Not a FLOP Labs, Technocore, or GenLayer Labs project; no endorsement, partnership, or integration is claimed. DID signature verification is deterministic cryptography; GenLayer adjudicates the meaning and consistency of authenticated evidence. Not a truth oracle, not a fulfillment oracle, not a settlement protocol — no escrow, no payments, no FLOP rails. tclk frames are displayed as structured evidence only. Private keys never leave your browser.</div>
   <div style="margin-top:8px">technocore.chat transcripts · GenLayer consensus derivation · sha256 evidence hash</div>
 </footer>
 
